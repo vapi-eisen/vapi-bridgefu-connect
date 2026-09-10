@@ -147,8 +147,10 @@ function printLogSample(events, reveal) {
   let shown = 0;
   for (const event of events) {
     const line = redactLogLine(event.message, { reveal });
-    if (seen.has(line)) continue;
-    seen.add(line);
+    // Collapse lines that differ only in addresses, ports, ids, or counters.
+    const shape = line.replace(/\[[0-9a-f:.]+\]|\b\d[\d.:]*\b/gi, "#");
+    if (seen.has(shape)) continue;
+    seen.add(shape);
     const at = event.timestamp ? new Date(Number(event.timestamp)).toISOString() : "";
     console.log(`      ${at} ${line}`);
     if (++shown >= SAMPLE_LINES) break;
