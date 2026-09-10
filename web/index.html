@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Brightline Mobile support lab</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">vapi-bridgefu-connect lab · browser handoff</p>
+      <h1>Brightline Mobile support</h1>
+      <p class="lede">
+        Talk to Riley, the Vapi assistant, from this page. Ask for a person and
+        watch the same call move to the Amazon Connect agent while this browser
+        connection stays up.
+      </p>
+
+      <section aria-labelledby="status-heading">
+        <h2 id="status-heading">Call</h2>
+        <output id="status" aria-live="polite">Loading…</output>
+        <p id="caption" class="caption" aria-live="polite"></p>
+        <audio id="remote-audio" autoplay></audio>
+        <div class="actions">
+          <button id="start" type="button" disabled>Talk to support</button>
+          <button id="mute" type="button" class="secondary" disabled>Mute</button>
+          <button id="dtmf" type="button" class="secondary" disabled>Send DTMF 9</button>
+          <button id="end" type="button" class="danger" disabled>End call</button>
+        </div>
+      </section>
+
+      <section aria-labelledby="timeline-heading">
+        <h2 id="timeline-heading">What is happening</h2>
+        <ol id="timeline" class="timeline"></ol>
+        <p class="meta">Session <code id="session">–</code></p>
+      </section>
+
+      <p class="notice">
+        Nonproduction lab page. This browser receives one short-lived Bridgefu
+        WebRTC attachment from the local server and never sees an AWS, Vapi, or
+        Bridgefu control credential.
+      </p>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

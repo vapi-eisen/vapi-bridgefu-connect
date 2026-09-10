@@ -1,0 +1,37 @@
+global
+    log stdout format raw local0
+    user haproxy
+    group haproxy
+    maxconn 256
+
+defaults
+    log global
+    mode http
+    option httplog
+    option dontlognull
+    timeout connect 3s
+    timeout client 12s
+    timeout server 12s
+
+# Same private control frontend the release ships, plus one extra allowlisted
+# path: the lab session Lambda creates browser route calls on the
+# vapi-direct-assistant route. Everything else is still denied.
+frontend bridgefu_private_control
+    bind __CONTROL_BIND__
+    acl exact_reservation path -m str /v1/routes/support/calls
+    acl exact_reservation_method method POST
+    acl lab_direct_route path -m str /v1/routes/vapi-direct-assistant/calls
+    acl lab_direct_route_method method POST
+    acl exact_leg_replacement path_reg ^/v1/calls/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/legs/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/replace$
+    acl exact_leg_replacement_method method POST
+    acl health_path path -m str /livez /readyz
+    http-request deny deny_status 404 unless health_path or exact_reservation or exact_leg_replacement or lab_direct_route
+    http-request deny deny_status 405 if exact_reservation !exact_reservation_method
+    http-request deny deny_status 405 if lab_direct_route !lab_direct_route_method
+    http-request deny deny_status 405 if exact_leg_replacement !exact_leg_replacement_method
+    default_backend bridgefu_loopback
+
+backend bridgefu_loopback
+    option httpchk GET /readyz
+    http-check expect status 200
+    server bridgefu 127.0.0.1:9090 check inter 5s fall 3 rise 2

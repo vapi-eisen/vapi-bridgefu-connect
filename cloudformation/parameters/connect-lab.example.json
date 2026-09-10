@@ -1,0 +1,6 @@
+[
+  {"ParameterKey": "DeploymentId", "ParameterValue": "lab"},
+  {"ParameterKey": "AgentUsername", "ParameterValue": "lab-agent"},
+  {"ParameterKey": "AgentAutoAccept", "ParameterValue": "true"},
+  {"ParameterKey": "LogRetentionDays", "ParameterValue": "7"}
+]

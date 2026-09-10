@@ -1,0 +1,252 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  One-time setup for hosting the vapi-bridgefu-connect lab in a shared AWS
+  account: a GitHub Actions OIDC role that runs the lab CLI, an S3 bucket that
+  keeps each engineer's lab state, and the Secrets Manager secret holding the
+  Vapi training-org private key. Deploy once as the account owner; engineers
+  never need AWS credentials. The role is bounded to lab-named resources where
+  AWS allows it and is otherwise broad, so use a dedicated lab account.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: GitHub trust}
+        Parameters: [GitHubRepository, GitHubRefSuffix, CreateOidcProvider]
+      - Label: {default: Lab account}
+        Parameters: [HostedZoneId, RoleName, StateBucketName, VapiSecretName]
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+    Description: owner/name of the repository whose workflows may assume the role.
+  GitHubRefSuffix:
+    Type: String
+    Default: '*'
+    Description: >-
+      Subject suffix after repo:<owner>/<name>:. Keep * to allow any branch and
+      environment, or set ref:refs/heads/main to allow only the main branch.
+  CreateOidcProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: false if this account already has the token.actions.githubusercontent.com provider.
+  HostedZoneId:
+    Type: String
+    AllowedPattern: '^[A-Z0-9]+$'
+    Description: Public Route53 hosted zone that receives every lab's SIP hostname.
+  RoleName:
+    Type: String
+    Default: BridgeFuLabRunner
+    AllowedPattern: '^[A-Za-z0-9+=,.@_-]{1,64}$'
+  StateBucketName:
+    Type: String
+    Default: ''
+    Description: Leave empty for bridgefu-lab-state-<account>-<region>.
+  VapiSecretName:
+    Type: String
+    Default: bridgefu/lab/vapi-private-key
+    Description: Secret that will hold the Vapi training-org private key (set its value after deployment).
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, 'true']
+  DefaultBucketName: !Equals [!Ref StateBucketName, '']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  StateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If [DefaultBucketName, !Sub 'bridgefu-lab-state-${AWS::AccountId}-${AWS::Region}', !Ref StateBucketName]
+      VersioningConfiguration: {Status: Enabled}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: 30}
+
+  VapiSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Ref VapiSecretName
+      Description: Vapi training-org private API key used by the lab runner. Set the raw key as the SecretString after deployment.
+      SecretString: '{"status":"unset"}'
+
+  RunnerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: GitHub Actions runner for the vapi-bridgefu-connect lab.
+      MaxSessionDuration: 14400
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !Ref GitHubOidcProvider
+                - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:${GitHubRefSuffix}'
+      Policies:
+        - PolicyName: BridgeFuLab
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: LabStacks
+                Effect: Allow
+                Action: cloudformation:*
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/bridgefu-*/*'
+              - Sid: CloudFormationRead
+                Effect: Allow
+                Action: [cloudformation:ListStacks, cloudformation:GetTemplateSummary, cloudformation:ValidateTemplate, cloudformation:DescribeStacks]
+                Resource: '*'
+              - Sid: LabIamRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:TagInstanceProfile
+                  - iam:CreatePolicy
+                  - iam:DeletePolicy
+                  - iam:GetPolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicyVersion
+                  - iam:ListPolicyVersions
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/bridgefu-*'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/bridgefu-*'
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/bridgefu-*'
+              - Sid: ServiceLinkedRoles
+                Effect: Allow
+                Action: [iam:CreateServiceLinkedRole, iam:GetRole, iam:ListRoles]
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/*'
+              - Sid: NetworkComputeCertificates
+                Effect: Allow
+                Action: ['ec2:*', 'acm:*', 'ssm:GetParameter', 'ssm:GetParameters', 'ssm:DescribeInstanceInformation', 'ssm:GetCommandInvocation', 'ssm:ListCommands', 'ssm:ListCommandInvocations']
+                Resource: '*'
+              - Sid: HostCommands
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:*:*:document/AWS-RunShellScript'
+                  - !Sub 'arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*'
+              - Sid: Dns
+                Effect: Allow
+                Action: [route53:ChangeResourceRecordSets, route53:ListResourceRecordSets, route53:GetHostedZone]
+                Resource: !Sub 'arn:${AWS::Partition}:route53:::hostedzone/${HostedZoneId}'
+              - Sid: DnsGlobal
+                Effect: Allow
+                Action: [route53:CreateHostedZone, route53:DeleteHostedZone, route53:GetChange, route53:ListHostedZones, route53:ListHostedZonesByName, route53:ListHostedZonesByVPC, route53:AssociateVPCWithHostedZone, route53:DisassociateVPCFromHostedZone, route53:ChangeTagsForResource, route53:ListTagsForResource]
+                Resource: '*'
+              - Sid: DnsPrivateZones
+                Effect: Allow
+                Action: [route53:ChangeResourceRecordSets, route53:ListResourceRecordSets, route53:GetHostedZone, route53:UpdateHostedZoneComment]
+                Resource: !Sub 'arn:${AWS::Partition}:route53:::hostedzone/*'
+                Condition:
+                  StringEquals:
+                    route53:HostedZoneIsPrivate: 'true'
+              - Sid: LabLambdas
+                Effect: Allow
+                Action: lambda:*
+                Resource: !Sub 'arn:${AWS::Partition}:lambda:*:${AWS::AccountId}:function:bridgefu-*'
+              - Sid: LabApis
+                Effect: Allow
+                Action: apigateway:*
+                Resource: !Sub 'arn:${AWS::Partition}:apigateway:*::/*'
+              - Sid: LabTables
+                Effect: Allow
+                Action: dynamodb:*
+                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:*:${AWS::AccountId}:table/bridgefu-*'
+              - Sid: LabSecrets
+                Effect: Allow
+                Action: secretsmanager:*
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:*:${AWS::AccountId}:secret:bridgefu/*'
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:*:${AWS::AccountId}:secret:bridgefu-*'
+              - Sid: SecretsRandom
+                Effect: Allow
+                Action: secretsmanager:GetRandomPassword
+                Resource: '*'
+              - Sid: LabTopics
+                Effect: Allow
+                Action: sns:*
+                Resource: !Sub 'arn:${AWS::Partition}:sns:*:${AWS::AccountId}:bridgefu-*'
+              - Sid: LabBuckets
+                Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::vapi-bridgefu-connect-lab-*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::vapi-bridgefu-connect-lab-*/*'
+                  - !Sub
+                    - 'arn:${AWS::Partition}:s3:::${Bucket}'
+                    - Bucket: !If [DefaultBucketName, !Sub 'bridgefu-lab-state-${AWS::AccountId}-${AWS::Region}', !Ref StateBucketName]
+                  - !Sub
+                    - 'arn:${AWS::Partition}:s3:::${Bucket}/*'
+                    - Bucket: !If [DefaultBucketName, !Sub 'bridgefu-lab-state-${AWS::AccountId}-${AWS::Region}', !Ref StateBucketName]
+              - Sid: ReleaseArtifacts
+                Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::bridgefu-vapi-awsconnect-*/*'
+              - Sid: ConnectMonitoringBackup
+                Effect: Allow
+                Action: ['connect:*', 'logs:*', 'cloudwatch:*', 'backup:*', 'backup-storage:*', 'ds:DescribeDirectories', 'kms:DescribeKey', 'kms:CreateGrant', 'kms:Decrypt', 'kms:GenerateDataKey', 'kms:ListAliases']
+                Resource: '*'
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt RunnerRole.Arn
+  StateBucketName:
+    Value: !Ref StateBucket
+  VapiSecretArn:
+    Value: !Ref VapiSecret
+  SetVapiKeyCommand:
+    Description: Run this yourself with the training-org key on stdin; never commit the key.
+    Value: !Sub 'aws secretsmanager put-secret-value --region ${AWS::Region} --secret-id ${VapiSecret} --secret-string file:///dev/stdin'
+  GitHubVariables:
+    Description: Repository variables the workflows read (set with gh variable set NAME --body VALUE).
+    Value: !Sub 'AWS_LAB_ROLE_ARN=${RunnerRole.Arn} AWS_LAB_REGION=${AWS::Region} LAB_STATE_BUCKET=${StateBucket} LAB_HOSTED_ZONE_ID=${HostedZoneId} LAB_VAPI_SECRET_ARN=${VapiSecret} LAB_HOSTED_ZONE_NAME=<zone name> LAB_MAX_AGE_DAYS=3'

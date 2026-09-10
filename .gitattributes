@@ -1,0 +1,4 @@
+# Keep GitHub language stats honest and diffs quiet for vendored/upstream material
+web/vendor/** linguist-vendored
+docs/upstream/** linguist-documentation
+*.map -diff

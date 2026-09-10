@@ -1,0 +1,294 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  NONPRODUCTION Amazon Connect lab instance for the vapi-bridgefu-connect
+  training lab: instance, 24x7 hours, one queue, a target flow that sends the
+  contact to that queue, a routing profile, a least-privilege agent security
+  profile with the custom-views permission the Bridgefu screen pop needs, and
+  one soft-phone agent whose password is generated into Secrets Manager.
+  Real Bridgefu deployments transfer into an existing customer-owned instance
+  and published flow; this template exists so the lab has one to transfer into.
+
+Metadata:
+  VapiBridgefuConnectLab:
+    NonProduction: true
+    Purpose: training
+    AdaptedFrom: bridgefu-vapi-awsconnect qualification/cloudformation/disposable-connect.yaml (MIT)
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: Lab identity}
+        Parameters: [DeploymentId, InstanceAlias, LogRetentionDays]
+      - Label: {default: Lab agent}
+        Parameters: [AgentUsername, AgentAutoAccept]
+      - Label: {default: Tags}
+        Parameters: [ProjectTag, ManagedByTag]
+
+Parameters:
+  DeploymentId:
+    Type: String
+    MinLength: 3
+    MaxLength: 24
+    AllowedPattern: '^[a-z][a-z0-9-]+$'
+    Description: Short lab name. The Connect alias becomes <DeploymentId>-connect and must be globally unique.
+  InstanceAlias:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[a-z0-9](?:[a-z0-9-]{0,43}[a-z0-9])?$'
+    Description: >-
+      Optional explicit Connect alias. Leave empty to use <DeploymentId>-connect.
+      Aliases are globally unique and Amazon Connect keeps a deleted instance's
+      alias reserved for roughly 30 days, so set this when an earlier lab used
+      the default name.
+  AgentUsername:
+    Type: String
+    Default: lab-agent
+    AllowedPattern: '^[A-Za-z0-9._-]{3,64}$'
+    Description: Login name of the single lab agent.
+  AgentAutoAccept:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      true answers incoming contacts automatically (handy when one person is
+      both caller and agent). false makes the agent click Accept and watch the
+      screen pop appear.
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90]
+    Description: Retention for the Connect flow log group.
+  ProjectTag:
+    Type: String
+    Default: vapi-bridgefu-connect
+  ManagedByTag:
+    Type: String
+    Default: vapi-bridgefu-connect-lab
+
+Conditions:
+  AutoAccept: !Equals [!Ref AgentAutoAccept, 'true']
+  UseDefaultAlias: !Equals [!Ref InstanceAlias, '']
+
+Resources:
+  LabConnectLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !If [UseDefaultAlias, !Sub '/aws/connect/${DeploymentId}-connect', !Sub '/aws/connect/${InstanceAlias}']
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - {Key: Project, Value: !Ref ProjectTag}
+        - {Key: ManagedBy, Value: !Ref ManagedByTag}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  LabInstance:
+    Type: AWS::Connect::Instance
+    DependsOn: LabConnectLogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      IdentityManagementType: CONNECT_MANAGED
+      InstanceAlias: !If [UseDefaultAlias, !Sub '${DeploymentId}-connect', !Ref InstanceAlias]
+      Attributes:
+        InboundCalls: true
+        OutboundCalls: false
+        ContactflowLogs: true
+      Tags:
+        - {Key: Project, Value: !Ref ProjectTag}
+        - {Key: ManagedBy, Value: !Ref ManagedByTag}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+        - {Key: Environment, Value: lab}
+
+  LabHours:
+    Type: AWS::Connect::HoursOfOperation
+    Properties:
+      InstanceArn: !GetAtt LabInstance.Arn
+      Name: !Sub 'bridgefu-${DeploymentId}-always-open'
+      Description: Nonproduction 24x7 hours for the lab queue.
+      TimeZone: UTC
+      Config:
+        - {Day: SUNDAY, StartTime: {Hours: 0, Minutes: 0}, EndTime: {Hours: 23, Minutes: 59}}
+        - {Day: MONDAY, StartTime: {Hours: 0, Minutes: 0}, EndTime: {Hours: 23, Minutes: 59}}
+        - {Day: TUESDAY, StartTime: {Hours: 0, Minutes: 0}, EndTime: {Hours: 23, Minutes: 59}}
+        - {Day: WEDNESDAY, StartTime: {Hours: 0, Minutes: 0}, EndTime: {Hours: 23, Minutes: 59}}
+        - {Day: THURSDAY, StartTime: {Hours: 0, Minutes: 0}, EndTime: {Hours: 23, Minutes: 59}}
+        - {Day: FRIDAY, StartTime: {Hours: 0, Minutes: 0}, EndTime: {Hours: 23, Minutes: 59}}
+        - {Day: SATURDAY, StartTime: {Hours: 0, Minutes: 0}, EndTime: {Hours: 23, Minutes: 59}}
+      Tags:
+        - {Key: Project, Value: !Ref ProjectTag}
+        - {Key: ManagedBy, Value: !Ref ManagedByTag}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  LabQueue:
+    Type: AWS::Connect::Queue
+    Properties:
+      InstanceArn: !GetAtt LabInstance.Arn
+      HoursOfOperationArn: !GetAtt LabHours.HoursOfOperationArn
+      Name: !Sub 'bridgefu-${DeploymentId}-support'
+      Description: Nonproduction queue that receives Bridgefu handoffs.
+      MaxContacts: 10
+      Status: ENABLED
+      Tags:
+        - {Key: Project, Value: !Ref ProjectTag}
+        - {Key: ManagedBy, Value: !Ref ManagedByTag}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  # This is the "customer's published flow" the Bridgefu stack transfers into
+  # after the screen-pop wrapper has run. It only needs to reach a queue.
+  LabTargetFlow:
+    Type: AWS::Connect::ContactFlow
+    Properties:
+      InstanceArn: !GetAtt LabInstance.Arn
+      Name: !Sub 'bridgefu-${DeploymentId}-lab-target'
+      Description: >-
+        Lab target flow. The Bridgefu wrapper flow transfers here after the
+        context lookup; this flow sends the contact to the lab queue.
+      Type: CONTACT_FLOW
+      State: ACTIVE
+      Content: !Sub |
+        {
+          "Version": "2019-10-30",
+          "StartAction": "set-lab-queue",
+          "Actions": [
+            {
+              "Identifier": "set-lab-queue",
+              "Type": "UpdateContactTargetQueue",
+              "Parameters": {"QueueId": "${LabQueue.QueueArn}"},
+              "Transitions": {
+                "NextAction": "transfer-to-lab-queue",
+                "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+              }
+            },
+            {
+              "Identifier": "transfer-to-lab-queue",
+              "Type": "TransferContactToQueue",
+              "Parameters": {},
+              "Transitions": {
+                "NextAction": "disconnect",
+                "Errors": [
+                  {"NextAction": "disconnect", "ErrorType": "QueueAtCapacity"},
+                  {"NextAction": "disconnect", "ErrorType": "NoMatchingError"}
+                ]
+              }
+            },
+            {
+              "Identifier": "disconnect",
+              "Type": "DisconnectParticipant",
+              "Parameters": {},
+              "Transitions": {}
+            }
+          ]
+        }
+      Tags:
+        - {Key: Project, Value: !Ref ProjectTag}
+        - {Key: ManagedBy, Value: !Ref ManagedByTag}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  LabRoutingProfile:
+    Type: AWS::Connect::RoutingProfile
+    Properties:
+      InstanceArn: !GetAtt LabInstance.Arn
+      Name: !Sub 'bridgefu-${DeploymentId}-agent-routing'
+      Description: Nonproduction voice routing profile for the lab agent.
+      DefaultOutboundQueueArn: !GetAtt LabQueue.QueueArn
+      MediaConcurrencies:
+        - Channel: VOICE
+          Concurrency: 1
+      QueueConfigs:
+        - Delay: 0
+          Priority: 1
+          QueueReference:
+            Channel: VOICE
+            QueueArn: !GetAtt LabQueue.QueueArn
+      Tags:
+        - {Key: Project, Value: !Ref ProjectTag}
+        - {Key: ManagedBy, Value: !Ref ManagedByTag}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  # CustomViews.Access and Views.View are what let Agent Workspace render the
+  # Bridgefu agent-guide view ("Bridgefu caller context"). Without them the
+  # call still arrives but the agent sees no screen pop.
+  LabAgentSecurityProfile:
+    Type: AWS::Connect::SecurityProfile
+    Properties:
+      InstanceArn: !GetAtt LabInstance.Arn
+      SecurityProfileName: !Sub 'bridgefu-${DeploymentId}-lab-agent'
+      Description: Least-privilege nonproduction agent access plus the Bridgefu screen-pop views.
+      Permissions:
+        - BasicAgentAccess
+        - CustomViews.Access
+        - Views.View
+      Tags:
+        - {Key: Project, Value: !Ref ProjectTag}
+        - {Key: ManagedBy, Value: !Ref ManagedByTag}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  LabAgentCredential:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub 'bridgefu-${DeploymentId}-lab-agent-credential'
+      Description: Generated credential for the lab Amazon Connect agent. Read it yourself; scripts never print it.
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${AgentUsername}"}'
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludePunctuation: true
+        IncludeSpace: false
+        RequireEachIncludedType: true
+      Tags:
+        - {Key: Project, Value: !Ref ProjectTag}
+        - {Key: ManagedBy, Value: !Ref ManagedByTag}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  LabAgent:
+    Type: AWS::Connect::User
+    Properties:
+      InstanceArn: !GetAtt LabInstance.Arn
+      Username: !Ref AgentUsername
+      Password: !Sub '{{resolve:secretsmanager:${LabAgentCredential}:SecretString:password}}'
+      IdentityInfo:
+        FirstName: Bridgefu
+        LastName: Lab Agent
+      PhoneConfig:
+        PhoneType: SOFT_PHONE
+        AutoAccept: !If [AutoAccept, true, false]
+        AfterContactWorkTimeLimit: 1
+      RoutingProfileArn: !GetAtt LabRoutingProfile.RoutingProfileArn
+      SecurityProfileArns:
+        - !GetAtt LabAgentSecurityProfile.SecurityProfileArn
+      Tags:
+        - {Key: Project, Value: !Ref ProjectTag}
+        - {Key: ManagedBy, Value: !Ref ManagedByTag}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+Outputs:
+  ConnectInstanceArn:
+    Description: Pass this to the Bridgefu stack as ConnectInstanceArn.
+    Value: !GetAtt LabInstance.Arn
+  ConnectInstanceId:
+    Value: !GetAtt LabInstance.Id
+  TargetContactFlowArn:
+    Description: Pass this to the Bridgefu stack as TargetContactFlowArn.
+    Value: !GetAtt LabTargetFlow.ContactFlowArn
+  QueueArn:
+    Value: !GetAtt LabQueue.QueueArn
+  RoutingProfileArn:
+    Value: !GetAtt LabRoutingProfile.RoutingProfileArn
+  AgentUsername:
+    Value: !Ref AgentUsername
+  AgentCredentialSecretArn:
+    Description: ARN only; the generated password value is never a stack output.
+    Value: !Ref LabAgentCredential
+  AgentCredentialCommand:
+    Description: Run this yourself to read the agent password.
+    Value: !Sub 'aws secretsmanager get-secret-value --region ${AWS::Region} --secret-id ${LabAgentCredential} --query SecretString --output text'
+  ConnectAlias:
+    Description: The instance alias actually used.
+    Value: !If [UseDefaultAlias, !Sub '${DeploymentId}-connect', !Ref InstanceAlias]
+  ConnectLoginUrl:
+    Description: Agent Workspace login for the lab agent.
+    Value: !If [UseDefaultAlias, !Sub 'https://${DeploymentId}-connect.my.connect.aws/agent-app-v2/', !Sub 'https://${InstanceAlias}.my.connect.aws/agent-app-v2/']
+  ConnectAdminUrl:
+    Description: Connect admin console for this instance.
+    Value: !If [UseDefaultAlias, !Sub 'https://${DeploymentId}-connect.my.connect.aws/', !Sub 'https://${InstanceAlias}.my.connect.aws/']

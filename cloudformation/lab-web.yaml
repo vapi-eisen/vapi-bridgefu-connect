@@ -1,0 +1,445 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  vapi-bridgefu-connect lab add-on for the browser-SDK handoff path. Attaches to
+  an existing Bridgefu stack (release 0.1.34) without modifying it: lets the
+  gateway dial Vapi over TLS, opens the WSS signaling port to one client CIDR,
+  adds the secrets and Lambdas the direct-browser handoff needs, and reuses the
+  released transfer_destination Lambda artifact for the handoff step. Adapted
+  from the upstream qualification stack (MIT). Nonproduction.
+
+Metadata:
+  VapiBridgefuConnectLab:
+    NonProduction: true
+    Purpose: training
+    AdaptedFrom: bridgefu-vapi-awsconnect qualification/cloudformation/template.yaml
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: Lab identity}
+        Parameters: [DeploymentId, SipHostname, LabClientCidr, WssPort, LogRetentionDays]
+      - Label: {default: Bridgefu stack outputs}
+        Parameters: [BridgefuGatewaySecurityGroupId, BridgefuGatewayRoleName, BridgefuTransferSecurityGroupId, BridgefuPrivateSubnetIds, HandoffTableName, HandoffTableArn, VapiWebhookSecretArn, BridgefuApiBearerSecretArn, ScreenPopFieldsJson, ScreenPopSchemaHash, SipSecurity]
+      - Label: {default: Released Bridgefu Lambda artifact}
+        Parameters: [ReleaseArtifactBucket, TransferArtifactKey, TransferArtifactVersion]
+      - Label: {default: Lab session Lambda artifact}
+        Parameters: [LabArtifactBucket, SessionArtifactKey, SessionArtifactVersion]
+
+Parameters:
+  DeploymentId:
+    Type: String
+    MinLength: 3
+    MaxLength: 24
+    AllowedPattern: '^[a-z][a-z0-9-]+$'
+  SipHostname:
+    Type: String
+    AllowedPattern: '^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])$'
+    Description: The Bridgefu stack's SipHostname; control.<SipHostname> is the private control endpoint.
+  LabClientCidr:
+    Type: String
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    Description: Public IPv4 /32 (or small CIDR) of the machine running the browser demo.
+  WssPort:
+    Type: Number
+    Default: 8443
+    MinValue: 1024
+    MaxValue: 65535
+    Description: TCP port on which Bridgefu terminates the browser's WSS signaling.
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30]
+  BridgefuGatewaySecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  BridgefuGatewayRoleName:
+    Type: String
+  BridgefuTransferSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  BridgefuPrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  HandoffTableName:
+    Type: String
+  HandoffTableArn:
+    Type: String
+    AllowedPattern: '^arn:aws[-a-z0-9]*:dynamodb:[-a-z0-9]+:[0-9]{12}:table/[A-Za-z0-9_.-]+$'
+  VapiWebhookSecretArn:
+    Type: String
+    AllowedPattern: '^arn:aws[-a-z0-9]*:secretsmanager:[-a-z0-9]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$'
+  BridgefuApiBearerSecretArn:
+    Type: String
+    AllowedPattern: '^arn:aws[-a-z0-9]*:secretsmanager:[-a-z0-9]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$'
+  ScreenPopFieldsJson:
+    Type: String
+    MaxLength: 4096
+  ScreenPopSchemaHash:
+    Type: String
+    AllowedPattern: '^[0-9a-f]{64}$'
+  SipSecurity:
+    Type: String
+    Default: sips_optional_srtp
+    AllowedValues: [sips_optional_srtp, sips_srtp]
+  ReleaseArtifactBucket:
+    Type: String
+    Description: Public release bucket from the Bridgefu stack's nested HandoffService parameters.
+  TransferArtifactKey:
+    Type: String
+    Description: releases/<version>/artifacts/lambda/transfer_destination.zip
+  TransferArtifactVersion:
+    Type: String
+    Description: Exact S3 object version of the released transfer_destination.zip.
+  LabArtifactBucket:
+    Type: String
+    Description: Engineer-owned versioned bucket holding the session Lambda zip and runtime overlay files.
+  SessionArtifactKey:
+    Type: String
+  SessionArtifactVersion:
+    Type: String
+
+Resources:
+  # ---------------------------------------------------------------- secrets
+  DirectHandoffSigningKey:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub 'bridgefu/${DeploymentId}/lab/direct-handoff-signing-key'
+      Description: HMAC key for the lab's direct-browser handoff tokens (issued by the session Lambda, verified by the released handoff Lambda).
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  DirectVapiIdentityBinding:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub 'bridgefu/${DeploymentId}/lab/direct-vapi-identity'
+      Description: Org and assistant id of the lab's direct web assistant; the handoff Lambda rejects any other caller.
+      SecretString: '{"status":"unbound"}'
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  DirectVapiSipAuthSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub 'bridgefu/${DeploymentId}/lab/vapi-sip-auth'
+      Description: Digest credentials Bridgefu presents when it dials the lab's Vapi SIP assistant.
+      SecretString: '{}'
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  LabSessionBearer:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub 'bridgefu/${DeploymentId}/lab/session-bearer'
+      Description: Bearer the local demo web server presents to the session API. Never sent to the browser.
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  # ------------------------------------------------- gateway host permissions
+  GatewayLabPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub 'bridgefu-${DeploymentId}-lab-web-gateway'
+      Roles: [!Ref BridgefuGatewayRoleName]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadVapiSipAuth
+            Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: !Ref DirectVapiSipAuthSecret
+          - Sid: ReadRuntimeOverlay
+            Effect: Allow
+            Action: s3:GetObject
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${LabArtifactBucket}/runtime/*'
+
+  # The customer path only needs inbound 5061 from Vapi. The browser path makes
+  # Bridgefu originate the SIP leg to Vapi, so it needs TLS egress to Vapi's two
+  # published US signaling addresses.
+  VapiTlsEgress1:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref BridgefuGatewaySecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5061
+      ToPort: 5061
+      CidrIp: 44.229.228.186/32
+      Description: Lab-only TLS to US Vapi signaling 1
+  VapiTlsEgress2:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref BridgefuGatewaySecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5061
+      ToPort: 5061
+      CidrIp: 44.238.177.138/32
+      Description: Lab-only TLS to US Vapi signaling 2
+
+  # Browser media (UDP 20000-20399) is already inside the product's public RTP
+  # range (UDP 16384-32767 from 0.0.0.0/0); only WSS signaling needs a rule.
+  WssIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref BridgefuGatewaySecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref WssPort
+      ToPort: !Ref WssPort
+      CidrIp: !Ref LabClientCidr
+      Description: Lab browser WSS signaling
+
+  # ----------------------------------------------------------- handoff Lambda
+  DirectHandoffLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/bridgefu-${DeploymentId}-direct-handoff'
+      RetentionInDays: !Ref LogRetentionDays
+
+  DirectHandoffRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'bridgefu-${DeploymentId}-direct-handoff'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+      Policies:
+        - PolicyName: ExactDirectHandoff
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: UpdateHandoffRow
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+                Resource: !Ref HandoffTableArn
+              - Sid: ReadHandoffSecrets
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DirectHandoffSigningKey
+                  - !Ref DirectVapiIdentityBinding
+                  - !Ref VapiWebhookSecretArn
+                  - !Ref BridgefuApiBearerSecretArn
+
+  # The released transfer_destination.zip serves POST /v1/direct-handoff: it
+  # verifies the Vapi tool call, checks the handoff token, stores the screen-pop
+  # values, and asks Bridgefu to replace the Vapi leg with Amazon Connect.
+  DirectHandoffFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: DirectHandoffLogGroup
+    Properties:
+      FunctionName: !Sub 'bridgefu-${DeploymentId}-direct-handoff'
+      Runtime: python3.13
+      Architectures: [arm64]
+      Handler: handler.lambda_handler
+      MemorySize: 256
+      Timeout: 10
+      Role: !GetAtt DirectHandoffRole.Arn
+      Code:
+        S3Bucket: !Ref ReleaseArtifactBucket
+        S3Key: !Ref TransferArtifactKey
+        S3ObjectVersion: !Ref TransferArtifactVersion
+      Environment:
+        Variables:
+          HANDOFF_TABLE_NAME: !Ref HandoffTableName
+          VAPI_WEBHOOK_SECRET_ARN: !Ref VapiWebhookSecretArn
+          VAPI_IDENTITY_BINDING_ARN: !Ref DirectVapiIdentityBinding
+          BRIDGEFU_API_BEARER_SECRET_ARN: !Ref BridgefuApiBearerSecretArn
+          BRIDGEFU_CONTROL_BASE_URL: !Sub 'https://control.${SipHostname}'
+          DIRECT_HANDOFF_SIGNING_KEY_SECRET_ARN: !Ref DirectHandoffSigningKey
+          DIRECT_HANDOFF_ROUTE_ID: amazon-connect
+          SCREEN_POP_FIELDS_JSON: !Ref ScreenPopFieldsJson
+          DEPLOYMENT_ID: !Ref DeploymentId
+          SIP_SECURITY: !Ref SipSecurity
+      VpcConfig:
+        SecurityGroupIds: [!Ref BridgefuTransferSecurityGroupId]
+        SubnetIds: !Ref BridgefuPrivateSubnetIds
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  # ----------------------------------------------------------- session Lambda
+  DirectSessionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/bridgefu-${DeploymentId}-direct-session'
+      RetentionInDays: !Ref LogRetentionDays
+
+  DirectSessionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'bridgefu-${DeploymentId}-direct-session'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+      Policies:
+        - PolicyName: ExactDirectSession
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: StageHandoffRow
+                Effect: Allow
+                Action: dynamodb:PutItem
+                Resource: !Ref HandoffTableArn
+              - Sid: ReadSessionSecrets
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DirectHandoffSigningKey
+                  - !Ref BridgefuApiBearerSecretArn
+                  - !Ref LabSessionBearer
+
+  # New lab code (lambda/direct_session/handler.py): mints the correlation id and
+  # handoff token, creates the Bridgefu route call with WebRTC ingress through
+  # the private control endpoint, stages the MAPPED DynamoDB row, and returns the
+  # one-use browser attachment to the local demo server.
+  DirectSessionFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: DirectSessionLogGroup
+    Properties:
+      FunctionName: !Sub 'bridgefu-${DeploymentId}-direct-session'
+      Runtime: python3.13
+      Architectures: [arm64]
+      Handler: handler.lambda_handler
+      MemorySize: 256
+      Timeout: 30
+      Role: !GetAtt DirectSessionRole.Arn
+      Code:
+        S3Bucket: !Ref LabArtifactBucket
+        S3Key: !Ref SessionArtifactKey
+        S3ObjectVersion: !Ref SessionArtifactVersion
+      Environment:
+        Variables:
+          BRIDGEFU_CONTROL_BASE_URL: !Sub 'https://control.${SipHostname}'
+          HANDOFF_TABLE_NAME: !Ref HandoffTableName
+          DIRECT_HANDOFF_SIGNING_KEY_SECRET_ARN: !Ref DirectHandoffSigningKey
+          BRIDGEFU_API_BEARER_SECRET_ARN: !Ref BridgefuApiBearerSecretArn
+          LAB_SESSION_BEARER_SECRET_ARN: !Ref LabSessionBearer
+          SCREEN_POP_SCHEMA_HASH: !Ref ScreenPopSchemaHash
+          CONTEXT_TTL_SECONDS: '3600'
+          DIRECT_ROUTE_ID: vapi-direct-assistant
+          CONNECT_ROUTE_ID: amazon-connect
+          DEPLOYMENT_ID: !Ref DeploymentId
+      VpcConfig:
+        SecurityGroupIds: [!Ref BridgefuTransferSecurityGroupId]
+        SubnetIds: !Ref BridgefuPrivateSubnetIds
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+        - {Key: LabDeploymentId, Value: !Ref DeploymentId}
+
+  # ------------------------------------------------------------------- HTTP API
+  LabApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub 'bridgefu-${DeploymentId}-lab-web'
+      ProtocolType: HTTP
+      Description: Lab direct-browser handoff API (auth happens inside the Lambdas).
+      Tags:
+        Project: vapi-bridgefu-connect
+        LabDeploymentId: !Ref DeploymentId
+
+  DirectHandoffIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref LabApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt DirectHandoffFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  # The route key must be exactly this string: the released handler branches on
+  # event["routeKey"] == "POST /v1/direct-handoff".
+  DirectHandoffRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref LabApi
+      RouteKey: POST /v1/direct-handoff
+      AuthorizationType: NONE
+      Target: !Join ['/', [integrations, !Ref DirectHandoffIntegration]]
+
+  DirectSessionIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref LabApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt DirectSessionFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  DirectSessionRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref LabApi
+      RouteKey: POST /v1/direct-session
+      AuthorizationType: NONE
+      Target: !Join ['/', [integrations, !Ref DirectSessionIntegration]]
+
+  LabApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref LabApi
+      StageName: '$default'
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+
+  DirectHandoffPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DirectHandoffFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${LabApi}/*/POST/v1/direct-handoff'
+
+  DirectSessionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DirectSessionFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${LabApi}/*/POST/v1/direct-session'
+
+Outputs:
+  DirectHandoffUrl:
+    Description: Server URL for the Vapi tool bridgefu_direct_handoff.
+    Value: !Sub 'https://${LabApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/v1/direct-handoff'
+  DirectSessionUrl:
+    Description: Session API the local demo server calls (with the lab bearer).
+    Value: !Sub 'https://${LabApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/v1/direct-session'
+  LabSessionBearerArn:
+    Value: !Ref LabSessionBearer
+  DirectVapiIdentityBindingArn:
+    Value: !Ref DirectVapiIdentityBinding
+  DirectVapiSipAuthSecretArn:
+    Value: !Ref DirectVapiSipAuthSecret
+  DirectHandoffSigningKeyArn:
+    Value: !Ref DirectHandoffSigningKey
+  WssPort:
+    Value: !Ref WssPort
+  LabClientCidr:
+    Value: !Ref LabClientCidr
+  LabApiId:
+    Value: !Ref LabApi

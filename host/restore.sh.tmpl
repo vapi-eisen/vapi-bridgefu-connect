@@ -1,0 +1,52 @@
+set -euo pipefail
+umask 077
+# vapi-bridgefu-connect lab overlay restore: put the release configuration back byte-exact.
+run=/var/lib/bridgefu/lab
+config=/etc/bridgefu/bridgefu.yaml
+haproxy_cfg=/etc/haproxy/haproxy.cfg
+dropin=/etc/systemd/system/bridgefu.service.d/lab-web-overlay.conf
+wrapper=$run/bridgefu-lab-run
+bridgefu_ready() {
+  curl --silent --show-error --max-time 2 http://127.0.0.1:9090/readyz 2>/dev/null |
+    python3 -c 'import json,sys; value=json.load(sys.stdin); raise SystemExit(0 if value.get("ok") is True and value.get("dependencies", {}).get("call_runtime") == "healthy" else 1)' >/dev/null 2>&1
+}
+bridgefu_lease_lost() {
+  curl --silent --show-error --max-time 2 http://127.0.0.1:9090/readyz 2>/dev/null |
+    python3 -c 'import json,sys; value=json.load(sys.stdin); raise SystemExit(0 if value.get("ok") is False and value.get("dependencies", {}).get("call_runtime") == "lease_lost" else 1)' >/dev/null 2>&1
+}
+wait_bridgefu_ready() {
+  attempts="$1"
+  for _ in $(seq 1 "$attempts"); do
+    if systemctl is-active --quiet bridgefu.service && bridgefu_ready; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+[ "$(id -u)" -eq 0 ]
+if [ ! -f "$run/bridgefu.yaml.original" ] && [ ! -f "$dropin" ]; then
+  printf '%s\n' '{"schema_version":1,"producer":"vapi-bridgefu-connect-lab-overlay@1","action":"restore","overlay_was_present":false,"bridgefu_ready":true}'
+  exit 0
+fi
+systemctl stop bridgefu.service
+if [ -f "$run/bridgefu.yaml.original" ]; then
+  cp --preserve=all "$run/bridgefu.yaml.original" "$config"
+  cmp -s "$run/bridgefu.yaml.original" "$config"
+fi
+if [ -f "$run/haproxy.cfg.original" ]; then
+  cp --preserve=all "$run/haproxy.cfg.original" "$haproxy_cfg"
+  cmp -s "$run/haproxy.cfg.original" "$haproxy_cfg"
+fi
+rm -f "$dropin" /run/bridgefu/lab-vapi.env
+systemctl daemon-reload
+systemctl reload haproxy.service
+systemctl start bridgefu.service
+if ! wait_bridgefu_ready 90; then
+  systemctl is-active --quiet bridgefu.service
+  bridgefu_lease_lost
+  systemctl restart bridgefu.service
+  wait_bridgefu_ready 90
+fi
+rm -f "$run/bridgefu.yaml.original" "$run/bridgefu.yaml.candidate" "$run/haproxy.cfg.original" "$run/haproxy.cfg.candidate" "$wrapper"
+rmdir "$run" 2>/dev/null || true
+[ ! -e "$dropin" ]
+printf '%s\n' '{"schema_version":1,"producer":"vapi-bridgefu-connect-lab-overlay@1","action":"restore","overlay_was_present":true,"configuration_restored":true,"dropin_absent":true,"bridgefu_ready":true}'

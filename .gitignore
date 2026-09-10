@@ -1,0 +1,19 @@
+# Lab runtime state (contains resource IDs and prior assignments; never commit)
+.lab/
+# Local environment files
+*.env
+.env.*
+# Python
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+# Node
+node_modules/
+# Build scratch
+/dist/
+/build/
+# OS
+.DS_Store
+# Claude Code per-user settings written when tools are approved locally
+.claude/settings.local.json

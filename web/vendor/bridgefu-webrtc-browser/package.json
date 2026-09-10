@@ -1,0 +1,39 @@
+{
+  "name": "@bridgefu/webrtc-browser",
+  "version": "0.1.0",
+  "description": "Typed browser WebRTC client for Bridgefu's rvoip signaling and DataChannel contracts (vendored build for the vapi-bridgefu-connect lab)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eisenzopf/bridgefu.git",
+    "directory": "sdk/typescript"
+  },
+  "homepage": "https://github.com/eisenzopf/bridgefu#readme",
+  "bugs": {
+    "url": "https://github.com/eisenzopf/bridgefu/issues"
+  },
+  "keywords": [
+    "webrtc",
+    "sip",
+    "rtp",
+    "rvoip",
+    "bridgefu"
+  ],
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "private": true
+}
