@@ -14,7 +14,7 @@
 //   lab-web-stack stage 5: only (re)deploy the lab-web stack
 //   status       show recorded state and stack statuses
 //   state        export | import | push | pull | delete state (handouts for engineers without AWS, CI)
-//   remote       provision | handout: engineer side of remote mode (own Vapi key, wrapped)
+//   remote       provision | handout | agent | verify | teardown: engineer side of remote mode (no AWS)
 //   key          wrap | unwrap | public-key: the key wrapping behind remote mode
 //   reap         tear down stale labs listed in the S3 state bucket (nightly CI)
 //   teardown     stage 6: remove everything in a safe order
@@ -48,7 +48,7 @@ export const COMMANDS = {
   "verify-web": { module: verify, run: verify.verifyWeb, help: "stage 5: verify a browser handoff" },
   "lab-web-stack": { module: labWebStack, run: labWebStack.deploy, help: "stage 5: only (re)deploy the lab-web stack" },
   status: { module: status, run: status.run, help: "show lab state" },
-  remote: { module: remote, run: remote.run, help: "provision | handout: run the lab in the shared AWS account with your own Vapi key (no AWS access needed)", positionals: true },
+  remote: { module: remote, run: remote.run, help: "provision | handout | agent | verify | teardown: run the lab in the shared account with your own Vapi org, no AWS access needed", positionals: true },
   key: { module: keyWrap, run: keyWrap.run, help: "wrap | unwrap | public-key: carry an engineer's own Vapi key into the lab account (remote mode)", positionals: true },
   state: { module: stateCmd, run: stateCmd.run, help: "export | import | push | pull | delete lab state (handouts, CI, S3)", positionals: true },
   reap: { module: reap, run: reap.run, help: "tear down labs older than --max-age-days from the S3 state bucket (CI)" },

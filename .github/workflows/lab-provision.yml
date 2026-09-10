@@ -40,8 +40,12 @@ on:
         description: "Optional explicit Connect alias (use when a previous lab held <handle>-connect)"
         type: string
         default: ""
+      handout_public_key:
+        description: "Base64 DER public key made by `remote provision`; the handout (with the agent password) is encrypted to it"
+        type: string
+        default: ""
       passphrase:
-        description: "Optional passphrase (8+ chars) to encrypt the handout artifact; import with state import --passphrase-env"
+        description: "Alternative to handout_public_key: passphrase (8+ chars) to encrypt the handout; import with state import --passphrase-env"
         type: string
         default: ""
 
@@ -113,10 +117,16 @@ jobs:
       - name: Write the handout
         env:
           HANDOUT_PASSPHRASE: ${{ inputs.passphrase }}
+          HANDOUT_PUBLIC_KEY: ${{ inputs.handout_public_key }}
+          STAGES: ${{ inputs.stages }}
         run: |
           extra=""
-          [ "${{ inputs.stages }}" = "full" ] && extra="--with-web-bearer"
-          [ -n "$HANDOUT_PASSPHRASE" ] && extra="$extra --passphrase-env HANDOUT_PASSPHRASE"
+          [ "$STAGES" = "full" ] && extra="--with-web-bearer"
+          if [ -n "$HANDOUT_PUBLIC_KEY" ]; then
+            extra="$extra --with-agent-password --encrypt-to $HANDOUT_PUBLIC_KEY"
+          elif [ -n "$HANDOUT_PASSPHRASE" ]; then
+            extra="$extra --with-agent-password --passphrase-env HANDOUT_PASSPHRASE"
+          fi
           node scripts/lab.mjs state export --out handout.json $extra
       - uses: actions/upload-artifact@v4
         with:

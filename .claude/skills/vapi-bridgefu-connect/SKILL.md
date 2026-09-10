@@ -13,8 +13,17 @@ sequence it, explain what each stage proves, confirm before spending or
 deleting, and read failures against the runbooks.
 
 Read `docs/00-overview.md` before the first stage so you can explain the two
-flows in your own words. The engineer learns more from a sentence about *why*
-the correlation id is the only thing on the wire than from a command list.
+flows in your own words. One or two sentences per stage is the right amount;
+the engineer learns more from a sentence about *why* the correlation id is the
+only thing on the wire than from a command list or a checklist of what you
+verified.
+
+**Decide the mode first.** If `.lab/state.json` has a `remote` key, or the
+engineer has not said they have their own AWS account and
+`gh variable get AWS_LAB_ROLE_ARN` succeeds, you are in **remote mode**: jump to
+that section and stay there. In remote mode never run `aws`, never mention AWS
+credentials, accounts, or Secrets Manager to the engineer, and never send them
+to a terminal; the commands below are all yours to run.
 
 ## Rules that protect the engineer
 
@@ -44,8 +53,11 @@ the correlation id is the only thing on the wire than from a command list.
 Start every session with:
 
 ```bash
-node scripts/lab.mjs status
+node scripts/lab.mjs status --no-aws
 ```
+
+If it shows `mode: remote`, use the remote section. Otherwise run `status`
+without `--no-aws` to see the stack statuses.
 
 It prints the recorded inputs, the three stack statuses, and which Vapi
 objects exist. Route the engineer to the next incomplete stage below. If there
@@ -153,56 +165,59 @@ wants to reuse the instance for another run.
 
 ## Remote mode: the engineer has no AWS access
 
-If `aws sts get-caller-identity` fails or the engineer says they have no AWS
-account, switch to remote mode (`docs/09-remote-lab.md`): the AWS stages run
-in the shared lab account through GitHub Actions; the engineer needs `gh` with
-write access to this repository (check `gh auth status`), Node, and the private
-API key of their OWN Vapi org. Confirm the owner did the one-time setup: if
-`gh variable list` shows no `AWS_LAB_ROLE_ARN` or `LAB_WRAP_PUBLIC_KEY`, stop
-and point the engineer to the owner.
+Most engineers use this mode. The AWS side runs inside GitHub Actions in a lab
+account the owner manages; you run the `remote` commands, the engineer never
+touches AWS or a terminal. They need `gh` logged in (`gh auth status`), the
+Vapi CLI (`vapi --version`; install: `curl -sSL https://vapi.ai/install.sh | bash`),
+and access to their own Vapi org. If `gh variable get AWS_LAB_ROLE_ARN` fails,
+the owner has not set the repository up: stop and say so.
 
-1. Provision (20-40 minutes). Choose a handle with the engineer. Have the
-   engineer run this themselves in their own terminal, because it prompts for
-   their Vapi private key (typing hidden) and you must never see or type that
-   key:
+Keep every message to two or three sentences: what is happening, what you need
+from them. No preambles, no lists of what you checked, no cost essays. Never ask
+for, print, or echo a Vapi key or password; the commands handle them.
 
-```bash
-export LAB_HANDOUT_PASSPHRASE='eight or more characters'   # optional, recommended with --stages full
-node scripts/lab.mjs remote provision --engineer <handle> --stages full --client-cidr auto --passphrase-env LAB_HANDOUT_PASSPHRASE
-gh run watch
-```
-
-   The command checks the key against the Vapi API, encrypts it to the lab
-   account's KMS key, and dispatches `lab-provision.yml`; the key never appears
-   in the repository, the run logs, or this conversation. Confirm before they
-   run it: it creates stacks that bill until torn down. Never pass a raw key as
-   the `vapi_key_wrapped` input; if one was pasted there, tell the engineer to
-   rotate it immediately.
-2. Import the handout, then continue locally:
+1. **Provision.** Agree a handle (3-24 lowercase letters, digits, hyphens; their
+   first name works) and `full` (phone + browser demo) or `phone`. Say once:
+   "This builds your lab in the shared account (about 30 minutes, roughly $0.10
+   an hour until torn down; a reaper removes it after 3 days)." Then run, in the
+   background because it may wait for a browser sign-in:
 
 ```bash
-node scripts/lab.mjs remote handout --engineer <handle>      # add --passphrase-env LAB_HANDOUT_PASSPHRASE if encrypted
-node scripts/lab.mjs status --no-aws
+node scripts/lab.mjs remote provision --engineer <handle> --stages full --client-cidr auto
 ```
 
-3. Phone test as in stage 4, but verify with
-   `gh workflow run lab-verify.yml -f engineer=<handle> -f mode=phone` and read
-   the run summary. The agent password is a Secrets Manager read only the
-   owner can do; ask them for it rather than trying to fetch it.
-4. Browser demo as in stage 5: `web-serve` works from the imported handout;
-   verify with `-f mode=web`.
-5. Teardown with `gh workflow run lab-teardown.yml -f engineer=<handle>`; it
-   also deletes the secret holding the engineer's key, and the nightly reaper
-   does the same for labs older than the configured age. The engineer should
-   not rotate their Vapi key before teardown finishes; teardown uses it to
-   delete the Vapi objects.
+   If the engineer has no Vapi CLI login yet, a browser tab opens on their
+   machine; tell them to sign in to Vapi there and pick their org. If the output
+   says the Vapi CLI is logged into several orgs, show them the names it lists,
+   ask which one, and re-run with `--vapi-account <name>`. When the command
+   exits it prints the run URL.
+2. **Wait and import.** In the background:
 
-Do not run `connect`, `bridgefu`, `web-setup`, `verify-*`, `teardown`, or
-`key unwrap` locally in remote mode; they need AWS credentials and will fail.
+```bash
+node scripts/lab.mjs remote handout --engineer <handle> --wait
+```
 
-A workflow step that fails with `AccessDenied` usually hit a deliberate
-guardrail of the bounded runner role; see `references/troubleshooting.md` and
-`docs/09-remote-lab.md` before asking the owner to widen anything.
+   It waits for the run (20-40 minutes), imports the handout, and prints the
+   dial-in number, the Agent Workspace URL, and the agent username. While it
+   runs, offer a two-sentence explanation of what is being built if they want it.
+3. **Agent login.** Run `node scripts/lab.mjs remote agent`. It opens the Agent
+   Workspace and puts the agent password on their clipboard; tell them the
+   username, to paste the password, and to set themselves Available.
+4. **Phone test.** Give them the dial-in number: call it, ask Riley for a
+   person, answer the questions, confirm. Then run
+   `node scripts/lab.mjs remote verify --engineer <handle> --mode phone` and
+   summarise the report in a few lines.
+5. **Browser demo** (`full` only). Run `node scripts/lab.mjs web-serve` in the
+   background, send them to `http://127.0.0.1:8787`, let them talk to Riley and
+   ask for a person, then `remote verify ... --mode web`.
+6. **Teardown.** When they are done, in the background:
+   `node scripts/lab.mjs remote teardown --engineer <handle>` (10-20 minutes).
+   It also deletes the secret that held their key; they should not rotate the
+   key before it finishes.
+
+Never run `connect`, `bridgefu`, `web-setup`, `verify-*`, `teardown`, or
+`key unwrap` locally in remote mode. A run that fails with `AccessDenied` hit a
+guardrail of the bounded runner role; see `references/troubleshooting.md`.
 ## Scoping conversations
 
 When the engineer is preparing for a customer rather than running the lab,

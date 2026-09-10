@@ -35,7 +35,7 @@ Then one of the two ways to run the AWS side:
 |---|---|---|
 | Access | An invitation to this repository (accept the email) and the **GitHub CLI** logged in: `gh auth login` | **AWS CLI v2** with credentials for a disposable account in `us-west-2` or `us-east-1` |
 | DNS | Nothing; labs get `bridgefu-<handle>.lab.vapi-internal.com` | A public Route53 hosted zone you control |
-| Vapi | The **private API key of your own Vapi org** (dashboard: Organization Settings, API Keys). It is encrypted on your laptop and only ever decrypted inside the lab account | The same key, stored in your own Secrets Manager |
+| Vapi | The **Vapi CLI** (`curl -sSL https://vapi.ai/install.sh \| bash`) and access to your own Vapi org. The lab signs you in through the Vapi dashboard; you never copy a key. It is encrypted on your laptop and only decrypted inside the lab account | Your org's private API key, stored in your own Secrets Manager |
 
 ### 2. Clone and open Claude Code in the folder
 
@@ -53,10 +53,10 @@ Say one of these; the skill loads on its own because you are in this folder:
 
 Later: "continue the lab at stage 5", "verify my phone call", "tear down the lab".
 
-What you will do by hand, when Claude tells you: type the one command that asks
-for your Vapi key (remote mode; it prompts with hidden input so the key never
-enters the conversation), log into the Amazon Connect Agent Workspace, place
-the phone call, and talk to the browser demo. Everything else is automated.
+Claude runs every command. What you do yourself, when it tells you: sign in to
+Vapi in the browser tab that opens (first time only), log into the Amazon
+Connect Agent Workspace (Claude puts the password on your clipboard), place the
+phone call, and talk to the browser demo. No terminal, no AWS.
 
 A lab costs roughly $0.10 per hour while it exists; in remote mode a nightly
 reaper removes labs older than three days. Read

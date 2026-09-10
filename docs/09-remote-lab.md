@@ -8,41 +8,52 @@ the engineer's org under the engineer's own private key; the owner never
 handles that key.
 
 ```text
-engineer's laptop                         GitHub Actions (OIDC role in the lab account)        AWS lab account
-node lab.mjs remote provision  -------->  lab-provision.yml: unwrap key (KMS) into a secret  -> stacks bridgefu-<handle>-*
-  (prompts for YOUR Vapi key and          preflight, connect, bridgefu, vapi, web-setup;        secret bridgefu/<handle>/vapi-private-key
-   encrypts it to the lab's KMS key)      state pushed to S3; handout artifact
-node lab.mjs remote handout    <--------  handout.json (state + optional web bearer, encrypted)
-place the call / web-serve
-gh workflow run lab-verify.yml  ------->  verify-phone / verify-web report
-gh workflow run lab-teardown.yml ------>  teardown (deletes the secret too); nightly lab-reaper.yml
+engineer (Claude Code)                    GitHub Actions (OIDC role in the lab account)        AWS lab account
+remote provision  ---------------------->  lab-provision.yml: unwrap key (KMS) into a secret  -> stacks bridgefu-<handle>-*
+  (key from the Vapi CLI login, wrapped     preflight, connect, bridgefu, vapi, web-setup;       secret bridgefu/<handle>/vapi-private-key
+   to the lab's KMS key; handout keypair)   state pushed to S3; encrypted handout artifact
+remote handout --wait  <----------------  handout.json (state, agent password, web bearer; encrypted to the engineer's keypair)
+remote agent / phone call / web-serve
+remote verify  ------------------------->  lab-verify.yml: verify-phone / verify-web report artifact
+remote teardown  ----------------------->  lab-teardown.yml (deletes the secret too); nightly lab-reaper.yml
 ```
 
 ## How the engineer's Vapi key travels
 
 The Bridgefu product stack reads the Vapi key from a Secrets Manager secret in
 the account it runs in (its provisioner Lambda creates the template assistant
-with it), so the key has to reach the lab account. It gets there without
-passing through the owner, the repository, or the run logs:
+with it), so the key has to reach the lab account. Nobody types or pastes it:
 
-1. `remote provision` (or the lower-level `key wrap`) prompts for the key on
-   the engineer's laptop, checks it against the Vapi API, and encrypts a small
+1. `remote provision` takes the key from the **Vapi CLI** login. If the CLI has
+   no login yet it runs `vapi auth login`, which opens the Vapi dashboard in the
+   engineer's browser; they sign in, pick their org, and the dashboard hands the
+   CLI a key for that org (stored in `~/.vapi-cli.yaml`). With several logins,
+   the command lists the org names and asks for `--vapi-account <name>`.
+   `VAPI_PRIVATE_KEY` in the environment overrides all of this for scripts.
+2. The command checks the key against the Vapi API, then encrypts a small
    payload `{engineer, key, exp}` with RSA-OAEP (SHA-256) to the public half of
    the sandbox's KMS key, published as the repository variable
-   `LAB_WRAP_PUBLIC_KEY`.
-2. The ciphertext is the workflow input `vapi_key_wrapped`. Workflow inputs are
-   visible to collaborators, which is fine here: only the runner role can ask
-   KMS to decrypt, the payload names the engineer, and it expires after an hour.
+   `LAB_WRAP_PUBLIC_KEY`. That ciphertext is the workflow input
+   `vapi_key_wrapped`. Inputs are visible to collaborators, which is fine: only
+   the runner role can ask KMS to decrypt, the payload names the engineer, and
+   it expires after an hour.
 3. The `Unwrap` step decrypts through KMS inside the run and stores the key in
    the secret `bridgefu/<handle>/vapi-private-key`, tagged like the rest of the
    lab. Later runs (verify, teardown, the reaper) read that secret.
 4. Teardown deletes the secret with the lab. The reaper does the same.
 
-What this does not hide: administrators of the lab account can read the secret
-while the lab exists, like any secret in that account. Engineers who want a
-key they can discard afterwards should use a Vapi org dedicated to labs. Do not
-rotate the key before teardown has finished: teardown uses it to delete the
-Vapi objects.
+The handout travels the other way with the same idea: `remote provision` makes
+an RSA keypair in `.lab/handout.key` and sends the public half as the input
+`handout_public_key`; the run encrypts the handout (lab state, the Connect
+agent password, and for `full` labs the browser session bearer) to it, so only
+the engineer's machine can open the artifact. `remote agent` puts the agent
+password on the clipboard instead of printing it.
+
+What this does not hide: administrators of the lab account can read the
+per-lab secret while the lab exists, like any secret in that account. Engineers
+who want a key they can discard afterwards should use a Vapi org dedicated to
+labs. Do not rotate the key before teardown has finished: teardown uses it to
+delete the Vapi objects.
 
 ## One-time setup (lab account owner)
 
@@ -150,61 +161,46 @@ their own BridgeFu stack because the product trusts exactly one Vapi assistant.
 
 ## Engineer flow (no AWS credentials)
 
-With Claude Code, open the repository and say **"run the BridgeFu lab in remote
-mode"**; the skill walks you through exactly these steps and tells you when to
-type the one command that takes your key. The steps are listed here so you know
-what happens.
+Open the repository in Claude Code and say **"run the BridgeFu lab in remote
+mode"**. The skill runs the commands below itself; they are listed so you know
+what happens. You need `gh` logged in with write access to this repository
+(dispatching a workflow requires it), Node 22, the Vapi CLI
+(`curl -sSL https://vapi.ai/install.sh | bash`), and access to your own Vapi
+org. Your handle (3 to 24 lowercase letters, digits, or hyphens) becomes the
+deployment id, the hostname `bridgefu-<handle>.<zone>`, and the Connect alias.
 
-You need `gh` logged in with write access to this repository (dispatching a
-workflow requires it; check `gh auth status`), Node 22, and the **private** API
-key of your own Vapi org (dashboard, Organization Settings, API Keys). Pick a
-handle: 3 to 24 lowercase letters, digits, or hyphens. It becomes your
-deployment id, your hostname `bridgefu-<handle>.<zone>`, and your Connect alias.
-
-1. **Provision** (20-40 minutes). Run this yourself in a terminal; it prompts
-   for your Vapi private key with typing hidden, checks it against the Vapi
-   API, encrypts it to the lab account, and dispatches the workflow:
+1. **Provision** (20-40 minutes). `remote provision` signs you in to Vapi
+   through your browser if needed, wraps your key, and starts the run:
 
 ```bash
-export LAB_HANDOUT_PASSPHRASE='choose eight or more characters'   # optional, recommended with --stages full
-node scripts/lab.mjs remote provision --engineer <handle> --stages full --client-cidr auto --passphrase-env LAB_HANDOUT_PASSPHRASE
-gh run watch
+node scripts/lab.mjs remote provision --engineer <handle> --stages full --client-cidr auto
+node scripts/lab.mjs remote handout --engineer <handle> --wait
 ```
 
-   Use `--stages phone` to skip the browser path. The passphrase encrypts the
-   handout artifact, which carries the lab session bearer for the local demo
-   server when the browser path is included. If you prefer the raw workflow,
-   `node scripts/lab.mjs key wrap --engineer <handle>` prints the ciphertext to
-   pass as `-f vapi_key_wrapped=...` to `gh workflow run lab-provision.yml`.
-   Never put a raw key into a workflow input; if that happens, rotate it.
+   `--stages phone` skips the browser path. `remote handout --wait` waits for
+   the run, imports the encrypted handout, and prints the dial-in number, the
+   Agent Workspace URL, and the agent username.
 
-2. **Import the handout** from the finished run:
+2. **Agent login**: `node scripts/lab.mjs remote agent` opens the Agent
+   Workspace with the agent password on your clipboard. Paste it, then set
+   yourself Available.
+
+3. **Phone test**: call the dial-in number, ask Riley for a person, answer the
+   questions, confirm. Then:
 
 ```bash
-node scripts/lab.mjs remote handout --engineer <handle> --passphrase-env LAB_HANDOUT_PASSPHRASE
-node scripts/lab.mjs status --no-aws
+node scripts/lab.mjs remote verify --engineer <handle> --mode phone
 ```
 
-3. **Phone test**: the run summary lists the dial-in number and the Agent
-   Workspace URL. Ask the owner for the lab agent password (the workflow never
-   prints it; the owner reads it with the `AgentCredentialCommand` output).
-   Set the agent Available, call, ask for a person, then:
-
-```bash
-gh workflow run lab-verify.yml -f engineer=<handle> -f mode=phone && gh run watch
-```
-
-   The report appears in the run summary.
-
-4. **Browser demo**: `node scripts/lab.mjs web-serve`, open
-   `http://127.0.0.1:8787`, talk to Riley, ask for a person, then run the verify
-   workflow with `-f mode=web`.
+4. **Browser demo** (`full` only): `node scripts/lab.mjs web-serve`, open
+   `http://127.0.0.1:8787`, talk to Riley, ask for a person, then
+   `remote verify --engineer <handle> --mode web`.
 
 5. **Teardown** when done (or let the reaper do it). It also deletes the secret
    holding your key; keep the key valid until this finishes:
 
 ```bash
-gh workflow run lab-teardown.yml -f engineer=<handle>
+node scripts/lab.mjs remote teardown --engineer <handle>
 ```
 
 ## What changes versus running with your own AWS access
@@ -212,12 +208,13 @@ gh workflow run lab-teardown.yml -f engineer=<handle>
 | Local with AWS | Remote |
 |---|---|
 | `preflight`, `connect`, `bridgefu`, `vapi`, `web-setup` on your laptop | the same commands inside `lab-provision.yml` |
-| `verify-phone`, `verify-web` on your laptop | `lab-verify.yml`, report in the run summary |
+| `verify-phone`, `verify-web` on your laptop | `remote verify` runs `lab-verify.yml` and prints the report |
 | `web-serve` reads the bearer from Secrets Manager | `web-serve` reads it from the imported handout |
-| `teardown` on your laptop | `lab-teardown.yml` or the nightly reaper |
-| Your Vapi key from `VAPI_PRIVATE_KEY` or your secret | still your own key: wrapped on your laptop, unwrapped inside the run into a per-lab secret, deleted at teardown |
+| `teardown` on your laptop | `remote teardown` runs `lab-teardown.yml`; the nightly reaper is the backstop |
+| Your Vapi key from `VAPI_PRIVATE_KEY` or your secret | still your own key, taken from the Vapi CLI login: wrapped on your laptop, unwrapped inside the run into a per-lab secret, deleted at teardown |
+| Agent password from your own Secrets Manager | inside the encrypted handout; `remote agent` copies it to your clipboard |
 
-Things that still require the owner: the agent password (a Secrets Manager
-read), changing your public IP for the browser path after provisioning (re-run
-`Lab provision` with `stages=full` and the new `client_cidr`; it updates the
-existing stack), and anything the runbooks say needs an SSM session on the host.
+Things that still require the owner: anything the runbooks say needs an SSM
+session on the host. Changing your public IP for the browser path after
+provisioning is a re-run of `remote provision` with `--stages full` and the new
+`--client-cidr`; it updates the existing stack.

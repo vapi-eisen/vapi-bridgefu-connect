@@ -28,7 +28,7 @@ class WorkflowTests(unittest.TestCase):
     def test_provision_inputs_and_stage_order(self):
         data = load("lab-provision.yml")
         inputs = data["on"]["workflow_dispatch"]["inputs"]
-        for key in ("engineer", "vapi_key_wrapped", "stages", "client_cidr", "area_code", "agent_auto_accept", "connect_alias", "passphrase"):
+        for key in ("engineer", "vapi_key_wrapped", "stages", "client_cidr", "area_code", "agent_auto_accept", "connect_alias", "handout_public_key", "passphrase"):
             self.assertIn(key, inputs)
         self.assertTrue(inputs["vapi_key_wrapped"]["required"], "every provision needs the engineer's wrapped key")
         text = (WORKFLOWS / "lab-provision.yml").read_text(encoding="utf-8")
@@ -41,6 +41,11 @@ class WorkflowTests(unittest.TestCase):
         save = next(step for step in data["jobs"]["provision"]["steps"] if step.get("name") == "Save state")
         self.assertEqual(save["if"], "always()")
         self.assertIn("lab-${{ inputs.engineer }}", data["concurrency"]["group"])
+
+    def test_verify_publishes_the_report_as_an_artifact(self):
+        text = (WORKFLOWS / "lab-verify.yml").read_text(encoding="utf-8")
+        self.assertIn("actions/upload-artifact@v4", text)
+        self.assertIn("lab-verify-${{ inputs.engineer }}-${{ inputs.mode }}", text)
 
     def test_teardown_forgets_state_only_on_success(self):
         data = load("lab-teardown.yml")

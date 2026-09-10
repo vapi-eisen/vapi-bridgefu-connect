@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as common from "./common.mjs";
 import { LabError, log } from "./common.mjs";
+import * as vapiCli from "./vapi_cli.mjs";
 
 export const WRAP_VERSION = 1;
 export const WRAP_TTL_SECONDS = 3600;
@@ -31,11 +32,13 @@ export const options = {
   "key-arn": { type: "string" },
   region: { type: "string" },
   "skip-vapi-check": { type: "boolean", default: false },
+  "vapi-account": { type: "string" },
+  "vapi-login": { type: "boolean", default: false },
 };
 
-export const help = `key wrap --engineer <handle> [--repo owner/name] [--public-key <base64 DER | PEM file>] [--skip-vapi-check]
-    Prompts for YOUR Vapi private key (or reads $VAPI_PRIVATE_KEY), checks it against the Vapi API and
-    prints a one-hour ciphertext for the lab-provision workflow input vapi_key_wrapped. Run it in your own terminal.
+export const help = `key wrap --engineer <handle> [--repo owner/name] [--public-key <base64 DER | PEM file>] [--vapi-account <name>] [--vapi-login] [--skip-vapi-check]
+    Takes YOUR Vapi private key from the Vapi CLI login (signing you in through the dashboard when needed; $VAPI_PRIVATE_KEY
+    overrides), checks it against the Vapi API and prints a one-hour ciphertext for the workflow input vapi_key_wrapped.
 key unwrap --engineer <handle> [--wrapped <ciphertext> | $LAB_WRAPPED_KEY] [--key-arn <kms arn> | $${KEY_ARN_VARIABLE}] [--region r]
     (CI) Decrypts with KMS and stores the key in secret bridgefu/<handle>/vapi-private-key, recorded in the lab state.
 key public-key [--key-arn <kms arn or alias>] [--region r]
@@ -141,13 +144,32 @@ export async function checkVapiKey(key) {
   if (!response.ok) throw new LabError(`the Vapi API answered ${response.status} while checking the key`);
 }
 
+/**
+ * The engineer's Vapi private key, never printed. Order: an environment
+ * variable (scripts), the Vapi CLI login (the normal path; it opens the Vapi
+ * dashboard when there is no login yet and refuses to guess between several
+ * orgs), and finally a hidden terminal prompt when there is a TTY.
+ */
 export async function obtainKey(values) {
-  const key = (process.env.VAPI_PRIVATE_KEY ?? "").trim() || (await common.promptSecret("Your Vapi PRIVATE key (typing is hidden)"));
-  if (!values["skip-vapi-check"]) {
-    await checkVapiKey(key);
-    log("the Vapi API accepted the key");
+  const check = values["skip-vapi-check"] ? async () => {} : checkVapiKey;
+  const fromEnv = (process.env.VAPI_PRIVATE_KEY ?? process.env.VAPI_API_KEY ?? "").trim();
+  if (fromEnv) {
+    await check(fromEnv);
+    log("using the Vapi key from the environment");
+    return fromEnv;
   }
-  return key;
+  if (vapiCli.vapiCliInstalled()) {
+    const { key, name, organization } = await vapiCli.keyFromVapiCli({ account: values["vapi-account"], forceLogin: values["vapi-login"] });
+    await check(key);
+    log(`using the Vapi CLI login ${name}${organization ? ` (${organization})` : ""}`);
+    return key;
+  }
+  if (process.stdin.isTTY) {
+    const key = await common.promptSecret("Your Vapi PRIVATE key (typing is hidden)");
+    await check(key);
+    return key;
+  }
+  throw new LabError(`no Vapi key available: ${vapiCli.INSTALL_HINT}; or set VAPI_PRIVATE_KEY`);
 }
 
 function currentState() {

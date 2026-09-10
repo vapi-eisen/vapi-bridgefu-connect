@@ -56,4 +56,8 @@ test("provision inputs carry the wrapped key and never a raw one", () => {
   assert.throws(() => provisionInputs({ engineer: "alice", stages: "full", wrapped }), /client-cidr/);
   assert.throws(() => provisionInputs({ engineer: "alice", stages: "phone", wrapped: KEY }), /wrapped key/);
   assert.throws(() => provisionInputs({ engineer: "alice", stages: "phone", wrapped, passphrase: "short" }), /passphrase/);
+  const keyed = provisionInputs({ engineer: "alice", stages: "phone", wrapped, handoutPublicKey: PUBLIC_DER });
+  assert.equal(keyed.handout_public_key, PUBLIC_DER);
+  assert.ok(!("passphrase" in keyed));
+  assert.throws(() => provisionInputs({ engineer: "alice", stages: "phone", wrapped, handoutPublicKey: "not base64!" }), /base64/);
 });

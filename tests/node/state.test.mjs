@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { LabError } from "../../scripts/lib/common.mjs";
 import { staleDeployments } from "../../scripts/lib/reap.mjs";
-import { buildHandout, decryptJson, encryptJson } from "../../scripts/lib/state_cmd.mjs";
+import { generateKeyPairSync } from "node:crypto";
+import { agentPasswordFrom, buildHandout, decryptJson, decryptJsonWithPrivateKey, encryptJson, encryptJsonToPublicKey } from "../../scripts/lib/state_cmd.mjs";
 
 const STATE = { region: "us-west-2", deployment_id: "alice", created_at: "2026-09-01T00:00:00.000Z", bridgefu: { outputs: { VapiAssistantId: "a1" } } };
 
@@ -37,4 +38,26 @@ test("reaper selects only labs older than the limit", () => {
   ];
   assert.deepEqual(staleDeployments(entries, 3, now), ["old"]);
   assert.deepEqual(staleDeployments(entries, 30, now), []);
+});
+
+test("handouts encrypted to the engineer's keypair open only with that private key", () => {
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const other = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
+  const publicDer = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+  const handout = buildHandout(STATE, { webBearer: "bearer-value", agentPassword: "agent-pw" });
+  assert.equal(handout.handout.includes_agent_password, true);
+  const envelope = encryptJsonToPublicKey(handout, publicDer);
+  assert.equal(envelope.kdf, "rsa-oaep-sha256");
+  const text = JSON.stringify(envelope);
+  assert.ok(!text.includes("agent-pw") && !text.includes("bearer-value"));
+  const opened = decryptJsonWithPrivateKey(envelope, privateKey.export({ type: "pkcs8", format: "pem" }));
+  assert.equal(opened.lab_agent_password, "agent-pw");
+  assert.equal(opened.lab_session_bearer, "bearer-value");
+  assert.throws(() => decryptJsonWithPrivateKey(envelope, other.export({ type: "pkcs8", format: "pem" })), /different handout key/);
+  assert.throws(() => decryptJson(envelope, "some passphrase"), /not a passphrase-encrypted/);
+});
+
+test("the agent password is read from the Connect secret in either shape", () => {
+  assert.equal(agentPasswordFrom(JSON.stringify({ username: "lab-agent", password: "P4ssw0rd" })), "P4ssw0rd");
+  assert.equal(agentPasswordFrom("bare-password\n"), "bare-password");
 });

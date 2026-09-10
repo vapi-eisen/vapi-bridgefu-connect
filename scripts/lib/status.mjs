@@ -21,6 +21,11 @@ export async function run(values) {
       rows.push([`stack ${kind}`, `${name}: ${(await common.stackStatus(name, state.region)) ?? "absent"}`]);
     }
   }
+  if (state.remote) rows.push(["mode", `remote: GitHub Actions in the lab account via ${state.remote.repo ?? "the repository"}`]);
+  const connect = state.connect?.outputs ?? {};
+  if (connect.ConnectLoginUrl) rows.push(["agent workspace", String(connect.ConnectLoginUrl)]);
+  if (connect.AgentUsername) rows.push(["agent username", String(connect.AgentUsername)]);
+  if (state.lab_agent_password) rows.push(["agent password", "in the handout: node scripts/lab.mjs remote agent"]);
   const phone = state.vapi?.phone;
   if (phone) rows.push(["dial-in", String(phone.number ?? phone.sipUri ?? phone.id)]);
   if (state.vapi?.attached_assistant) rows.push(["attached assistant", String(state.vapi.attached_assistant.id)]);

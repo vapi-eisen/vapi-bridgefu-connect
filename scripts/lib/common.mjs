@@ -4,7 +4,7 @@
 // - secrets are read when needed and never written to state, printed, or logged;
 // - every AWS call goes through aws() so failures show the service error text;
 // - state (.lab/state.json) holds identifiers only.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -344,4 +344,25 @@ export async function commandVersion(command, flag = "--version") {
 
 export function nowIso() {
   return new Date().toISOString();
+}
+
+// ------------------------------------------------------------------ desktop
+/** Best-effort: open a URL in the engineer's default browser. True when a launcher accepted it. */
+export function openInBrowser(url) {
+  const launchers = process.platform === "darwin" ? [["open", [url]]] : process.platform === "win32" ? [["cmd", ["/c", "start", "", url]]] : [["xdg-open", [url]], ["wslview", [url]]];
+  for (const [command, args] of launchers) {
+    const result = spawnSync(command, args, { stdio: "ignore", timeout: 5000 });
+    if (!result.error && result.status === 0) return true;
+  }
+  return false;
+}
+
+/** Best-effort clipboard copy; true when a clipboard tool accepted the text. */
+export function copyToClipboard(text) {
+  const tools = process.platform === "darwin" ? [["pbcopy", []]] : process.platform === "win32" ? [["clip", []]] : [["wl-copy", []], ["xclip", ["-selection", "clipboard"]], ["xsel", ["--clipboard", "--input"]]];
+  for (const [command, args] of tools) {
+    const result = spawnSync(command, args, { input: text, stdio: ["pipe", "ignore", "ignore"], timeout: 5000 });
+    if (!result.error && result.status === 0) return true;
+  }
+  return false;
 }
