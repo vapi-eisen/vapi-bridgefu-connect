@@ -24,6 +24,7 @@ export const options = {
   stages: { type: "string", default: "phone" },
   "client-cidr": { type: "string" },
   "area-code": { type: "string", default: "415" },
+  "runtime-filter": { type: "string" },
   "agent-auto-accept": { type: "string", default: "true" },
   "connect-alias": { type: "string" },
   "vapi-account": { type: "string" },
@@ -52,7 +53,7 @@ remote handout --engineer <handle> [--wait] [--timeout-minutes 60] [--run <id>]
     Downloads and imports the encrypted handout of the provision run (with --wait: after waiting for the run to finish).
 remote agent
     Opens the Agent Workspace and puts the lab agent password on your clipboard.
-remote verify --engineer <handle> --mode phone|web [--since-minutes 30] [--session-id <id>]
+remote verify --engineer <handle> --mode phone|web [--since-minutes 30] [--session-id <id>] [--runtime-filter '?sip ?INVITE']
     Runs ${VERIFY_WORKFLOW}, waits, and prints the report.
 remote teardown --engineer <handle> [--keep-connect] [--no-wait]
     Runs ${TEARDOWN_WORKFLOW} and waits for it; the lab and the secret holding your key are removed.`;
@@ -258,7 +259,7 @@ export async function verify(values) {
   if (!/^\d{1,4}$/.test(values["since-minutes"])) throw new LabError("--since-minutes must be a number");
   const remote = readRemote();
   const repo = await keyWrap.resolveRepo(values.repo ?? remote.repo);
-  const inputs = { engineer, mode: values.mode, since_minutes: values["since-minutes"], session_id: values["session-id"] ?? "", reveal: "false" };
+  const inputs = { engineer, mode: values.mode, since_minutes: values["since-minutes"], session_id: values["session-id"] ?? "", reveal: "false", runtime_filter: values["runtime-filter"] ?? "" };
   const run = await dispatch(repo, VERIFY_WORKFLOW, inputs, values.ref);
   log(`verify run started: ${run.url}`);
   const result = await waitForRun(repo, run.id, { minutes: Math.min(timeoutMinutes(values), 30) });

@@ -24,6 +24,10 @@ on:
         description: "print raw correlation ids"
         type: boolean
         default: false
+      runtime_filter:
+        description: "also print Bridgefu runtime log lines matching this CloudWatch filter pattern (optional)"
+        type: string
+        default: ""
 
 permissions:
   id-token: write
@@ -49,6 +53,8 @@ jobs:
       - name: Restore saved state
         run: node scripts/lab.mjs state pull --bucket "${{ vars.LAB_STATE_BUCKET }}" --deployment "${{ inputs.engineer }}"
       - name: Verify
+        env:
+          LAB_RUNTIME_FILTER: ${{ inputs.runtime_filter }}
         run: |
           args="--since-minutes ${{ inputs.since_minutes }}"
           [ "${{ inputs.reveal }}" = "true" ] && args="$args --reveal"

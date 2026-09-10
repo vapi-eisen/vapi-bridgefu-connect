@@ -14,8 +14,10 @@ export const options = {
   "since-minutes": { type: "string", default: "30" },
   reveal: { type: "boolean", default: false },
   "session-id": { type: "string" },
+  "runtime-filter": { type: "string" },
 };
-export const help = `--since-minutes 30  --reveal (print raw correlation ids)  --session-id <id from the web page> (verify-web only)`;
+export const help = `--since-minutes 30  --reveal (print raw correlation ids)  --session-id <id from the web page> (verify-web only)
+--runtime-filter '?sip ?INVITE'  (also print redacted Bridgefu runtime lines matching this CloudWatch filter pattern, any level; or set LAB_RUNTIME_FILTER)`;
 
 const PREPARED = ["PREPARED", "RESERVED", "CONSUMED"];
 
@@ -142,7 +144,7 @@ export function redactLogLine(raw, { reveal = false } = {}) {
   return text.length > SAMPLE_WIDTH ? `${text.slice(0, SAMPLE_WIDTH)}...` : text;
 }
 
-function printLogSample(events, reveal) {
+function printLogSample(events, reveal, limit = SAMPLE_LINES) {
   const seen = new Set();
   let shown = 0;
   for (const event of events) {
@@ -153,7 +155,7 @@ function printLogSample(events, reveal) {
     seen.add(shape);
     const at = event.timestamp ? new Date(Number(event.timestamp)).toISOString() : "";
     console.log(`      ${at} ${line}`);
-    if (++shown >= SAMPLE_LINES) break;
+    if (++shown >= limit) break;
   }
   if (events.length > shown) console.log(`      (${events.length - shown} more; repeated lines collapsed)`);
 }
@@ -262,6 +264,15 @@ export async function run(values, mode) {
     if (events?.length) printLogSample(events, values.reveal);
   }
   console.log("  (samples above are redacted; open a group in the CloudWatch console for the full lines)");
+  const runtimeFilter = values["runtime-filter"] ?? process.env.LAB_RUNTIME_FILTER;
+  if (runtimeFilter && runtimeGroup) {
+    console.log("");
+    console.log(`== Bridgefu runtime lines matching ${JSON.stringify(runtimeFilter)} (any level, redacted) ==`);
+    const events = await logMatches(runtimeGroup, runtimeFilter, region, since);
+    if (events === null) console.log("  unavailable");
+    else if (!events.length) console.log("  (none in the window)");
+    else printLogSample(events, values.reveal, 40);
+  }
 
   console.log("");
   console.log("== Checks ==");
