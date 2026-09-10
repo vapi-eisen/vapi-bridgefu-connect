@@ -43,9 +43,10 @@ node scripts/lab.mjs teardown         # stage 6
 Roughly $0.10/hour while the lab exists. Read [docs/00-overview.md](docs/00-overview.md) first.
 
 **No AWS access?** The AWS stages can run in a shared lab account through
-GitHub Actions; engineers then need only GitHub access and Node. See
-[docs/09-remote-lab.md](docs/09-remote-lab.md) for the one-time owner setup
-(`iam/lab-runner.yaml`) and the engineer flow (`gh workflow run lab-provision.yml ...`).
+GitHub Actions; engineers then need only GitHub access, Node, and their own
+Vapi org. See [docs/09-remote-lab.md](docs/09-remote-lab.md) for the one-time
+owner setup (`iam/lab-runner.yaml`) and the engineer flow
+(`node scripts/lab.mjs remote provision ...`).
 
 ## What is in the repository
 

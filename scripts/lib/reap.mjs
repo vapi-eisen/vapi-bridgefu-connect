@@ -52,7 +52,7 @@ export async function run(values) {
     log(`== reaping ${deployment} ==`);
     await aws(["s3", "cp", `s3://${values.bucket}/${deployment}/state.json`, common.STATE_PATH, "--only-show-errors"], { output: "none" });
     try {
-      await teardown.run({ "dry-run": false, "keep-connect": false, "keep-vapi-secret": true, yes: true });
+      await teardown.run({ "dry-run": false, "keep-connect": false, "keep-vapi-secret": false, yes: true });
       await aws(["s3", "rm", `s3://${values.bucket}/${deployment}/state.json`, "--only-show-errors"], { output: "none" });
     } catch (error) {
       log(`teardown of ${deployment} failed: ${error.message}; its state was kept for the next run`);

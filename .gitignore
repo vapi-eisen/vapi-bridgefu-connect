@@ -17,3 +17,4 @@ node_modules/
 .DS_Store
 # Claude Code per-user settings written when tools are approved locally
 .claude/settings.local.json
+.lab-handout/

@@ -155,28 +155,33 @@ wants to reuse the instance for another run.
 
 If `aws sts get-caller-identity` fails or the engineer says they have no AWS
 account, switch to remote mode (`docs/09-remote-lab.md`): the AWS stages run
-in the shared lab account through GitHub Actions and the engineer only needs
-`gh` (check `gh auth status`) and Node. Confirm the repository has the runner
-variables set (the owner did the one-time setup); if `gh variable list` shows
-no `AWS_LAB_ROLE_ARN`, stop and point the engineer to the owner.
+in the shared lab account through GitHub Actions; the engineer needs `gh` with
+write access to this repository (check `gh auth status`), Node, and the private
+API key of their OWN Vapi org. Confirm the owner did the one-time setup: if
+`gh variable list` shows no `AWS_LAB_ROLE_ARN` or `LAB_WRAP_PUBLIC_KEY`, stop
+and point the engineer to the owner.
 
-1. Provision (20-40 minutes). Choose a handle with the engineer and, for the
-   browser path, get their public IP first:
+1. Provision (20-40 minutes). Choose a handle with the engineer. Have the
+   engineer run this themselves in their own terminal, because it prompts for
+   their Vapi private key (typing hidden) and you must never see or type that
+   key:
 
 ```bash
-gh workflow run lab-provision.yml -f engineer=<handle> -f stages=full -f client_cidr="$(curl -s https://checkip.amazonaws.com)/32"
+export LAB_HANDOUT_PASSPHRASE='eight or more characters'   # optional, recommended with --stages full
+node scripts/lab.mjs remote provision --engineer <handle> --stages full --client-cidr auto --passphrase-env LAB_HANDOUT_PASSPHRASE
 gh run watch
 ```
 
-   Confirm before dispatching: it creates stacks that bill until torn down.
-   If the browser path is included, suggest a handout passphrase
-   (`-f passphrase='...'`) and let the engineer type that command themselves
-   so the passphrase never appears in this conversation.
+   The command checks the key against the Vapi API, encrypts it to the lab
+   account's KMS key, and dispatches `lab-provision.yml`; the key never appears
+   in the repository, the run logs, or this conversation. Confirm before they
+   run it: it creates stacks that bill until torn down. Never pass a raw key as
+   the `vapi_key_wrapped` input; if one was pasted there, tell the engineer to
+   rotate it immediately.
 2. Import the handout, then continue locally:
 
 ```bash
-gh run download --name lab-handout-<handle> --dir .lab-handout
-node scripts/lab.mjs state import .lab-handout/handout.json      # add --passphrase-env VAR if encrypted
+node scripts/lab.mjs remote handout --engineer <handle>      # add --passphrase-env LAB_HANDOUT_PASSPHRASE if encrypted
 node scripts/lab.mjs status --no-aws
 ```
 
@@ -186,12 +191,18 @@ node scripts/lab.mjs status --no-aws
    owner can do; ask them for it rather than trying to fetch it.
 4. Browser demo as in stage 5: `web-serve` works from the imported handout;
    verify with `-f mode=web`.
-5. Teardown with `gh workflow run lab-teardown.yml -f engineer=<handle>`;
-   the nightly reaper also removes labs older than the configured age.
+5. Teardown with `gh workflow run lab-teardown.yml -f engineer=<handle>`; it
+   also deletes the secret holding the engineer's key, and the nightly reaper
+   does the same for labs older than the configured age. The engineer should
+   not rotate their Vapi key before teardown finishes; teardown uses it to
+   delete the Vapi objects.
 
-Do not run `connect`, `bridgefu`, `web-setup`, `verify-*`, or `teardown`
-locally in remote mode; they need AWS credentials and will fail.
+Do not run `connect`, `bridgefu`, `web-setup`, `verify-*`, `teardown`, or
+`key unwrap` locally in remote mode; they need AWS credentials and will fail.
 
+A workflow step that fails with `AccessDenied` usually hit a deliberate
+guardrail of the bounded runner role; see `references/troubleshooting.md` and
+`docs/09-remote-lab.md` before asking the owner to widen anything.
 ## Scoping conversations
 
 When the engineer is preparing for a customer rather than running the lab,

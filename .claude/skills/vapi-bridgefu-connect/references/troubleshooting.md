@@ -23,3 +23,5 @@ Runbooks live in `docs/upstream/bridgefu-vapi-awsconnect/runbooks/`.
 | Orphaned Connect contact after hangup | BridgeFu reconciles `StopContact`; do not bulk-stop contacts | `cleanup-backlog.md` |
 | Host rebooted; browser path stopped | Overlay drift: `web-overlay status` then `web-overlay apply` | `docs/05-web-sdk-handoff.md` |
 | Teardown reports a failed step | Re-run `teardown`; the state file is kept. `lab-web` must go before `bridgefu`, `bridgefu` before `connect` | `docs/06-teardown.md` |
+| Remote mode: a workflow step fails with `AccessDenied` or `not authorized` | The runner role is bounded on purpose (names `bridgefu-*`, record names under the lab zone, two regions, ARM instance types). Read the denied action and Sid in the error against `iam/lab-runner.yaml` before widening anything | `docs/09-remote-lab.md` |
+| Remote mode: the `Unwrap` step fails with `expired`, `made for engineer`, or `RAW Vapi key` | Wrapped keys last one hour and are bound to the handle: run `remote provision` (or `key wrap`) again for that handle. A raw key pasted into the input is visible to collaborators, so rotate it in the Vapi dashboard | `docs/09-remote-lab.md` |

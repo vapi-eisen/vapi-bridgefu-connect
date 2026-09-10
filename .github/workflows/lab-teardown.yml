@@ -40,7 +40,7 @@ jobs:
         run: |
           extra=""
           [ "${{ inputs.keep_connect }}" = "true" ] && extra="--keep-connect"
-          node scripts/lab.mjs teardown --yes --keep-vapi-secret $extra
+          node scripts/lab.mjs teardown --yes $extra
       - name: Forget the lab
         run: node scripts/lab.mjs state delete --bucket "${{ vars.LAB_STATE_BUCKET }}" --deployment "${{ inputs.engineer }}"
       - name: Keep partial state for a retry
