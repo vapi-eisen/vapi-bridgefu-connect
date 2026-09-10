@@ -201,9 +201,11 @@ export async function wrap(values) {
 
 async function storeSecret(name, key, region) {
   try {
-    const created = await common.aws(
-      ["secretsmanager", "create-secret", "--name", name, "--description", "Vapi private API key for one vapi-bridgefu-connect lab; deleted by teardown", "--secret-string", "file:///dev/stdin", "--tags", `Key=Project,Value=${common.PROJECT_TAG}`],
-      { region, input: key },
+    const created = await common.withSecretFile(key, (uri) =>
+      common.aws(
+        ["secretsmanager", "create-secret", "--name", name, "--description", "Vapi private API key for one vapi-bridgefu-connect lab; deleted by teardown", "--secret-string", uri, "--tags", `Key=Project,Value=${common.PROJECT_TAG}`],
+        { region },
+      ),
     );
     if (!created?.ARN) throw new LabError("secret creation returned no ARN");
     return String(created.ARN);

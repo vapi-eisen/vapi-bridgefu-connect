@@ -56,9 +56,11 @@ async function ensureVapiSecret(values, state, region) {
   if (!values["create-vapi-secret"]) throw new LabError("pass --vapi-secret-arn <arn> or --create-vapi-secret (reads $VAPI_PRIVATE_KEY or prompts)");
   const key = (process.env.VAPI_PRIVATE_KEY ?? "").trim() || (await common.promptSecret("Vapi private API key"));
   const name = `bridgefu/${values["deployment-id"]}/vapi-private-key`;
-  const created = await aws(
-    ["secretsmanager", "create-secret", "--name", name, "--description", "Vapi private API key for the vapi-bridgefu-connect lab", "--secret-string", "file:///dev/stdin", "--tags", `Key=Project,Value=${common.PROJECT_TAG}`],
-    { region, input: key },
+  const created = await common.withSecretFile(key, (uri) =>
+    aws(
+      ["secretsmanager", "create-secret", "--name", name, "--description", "Vapi private API key for the vapi-bridgefu-connect lab", "--secret-string", uri, "--tags", `Key=Project,Value=${common.PROJECT_TAG}`],
+      { region },
+    ),
   );
   if (!created?.ARN) throw new LabError("secret creation returned no ARN");
   log(`created secret ${name}`);

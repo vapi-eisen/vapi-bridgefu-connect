@@ -5,9 +5,9 @@
 // - every AWS call goes through aws() so failures show the service error text;
 // - state (.lab/state.json) holds identifiers only.
 import { spawn, spawnSync } from "node:child_process";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -155,8 +155,25 @@ export async function secretValue(arn, region) {
   return value;
 }
 
+/**
+ * Hands a secret value to fn as a file:// URI the AWS CLI can read, on a 0600 file in a private
+ * scratch directory that is removed afterwards. Not file:///dev/stdin: Node gives a child process a
+ * socket for stdin on Linux, and the CLI cannot open a socket through /proc/self/fd/0 (ENXIO on the
+ * GitHub Actions runner). Nothing is logged; the path never carries the value.
+ */
+export async function withSecretFile(value, fn) {
+  const scratch = mkdtempSync(join(tmpdir(), "bridgefu-secret-"));
+  try {
+    const path = join(scratch, "value");
+    writeFileSync(path, value, { mode: 0o600 });
+    return await fn(`file://${path}`);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 export async function putSecretValue(arn, value, region) {
-  await aws(["secretsmanager", "put-secret-value", "--secret-id", arn, "--secret-string", "file:///dev/stdin"], { region, input: value, output: "none" });
+  await withSecretFile(value, (uri) => aws(["secretsmanager", "put-secret-value", "--secret-id", arn, "--secret-string", uri], { region, output: "none" }));
 }
 
 export async function stackStatus(name, region) {

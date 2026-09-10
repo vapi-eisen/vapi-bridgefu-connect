@@ -61,3 +61,20 @@ test("the agent password is read from the Connect secret in either shape", () =>
   assert.equal(agentPasswordFrom(JSON.stringify({ username: "lab-agent", password: "P4ssw0rd" })), "P4ssw0rd");
   assert.equal(agentPasswordFrom("bare-password\n"), "bare-password");
 });
+
+test("withSecretFile hands the AWS CLI a private file:// path and removes it afterwards", async () => {
+  const { withSecretFile } = await import("../../scripts/lib/common.mjs");
+  const { readFileSync, statSync, existsSync } = await import("node:fs");
+  let seen;
+  const result = await withSecretFile("sk-secret-value", (uri) => {
+    assert.match(uri, /^file:\/\/\//);
+    assert.ok(!uri.includes("/dev/stdin"));
+    seen = uri.slice("file://".length);
+    assert.equal(readFileSync(seen, "utf8"), "sk-secret-value");
+    if (process.platform !== "win32") assert.equal(statSync(seen).mode & 0o777, 0o600);
+    return "done";
+  });
+  assert.equal(result, "done");
+  assert.ok(!existsSync(seen));
+  await assert.rejects(withSecretFile("x", () => { throw new Error("boom"); }), /boom/);
+});
