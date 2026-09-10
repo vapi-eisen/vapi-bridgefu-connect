@@ -70,3 +70,11 @@ test("transfer tool has no destination", () => {
   assert.equal(tool.type, "transferCall");
   assert.deepEqual(tool.destinations, []);
 });
+
+test("usernameFromSipUri extracts the user part and tolerates junk", async () => {
+  const { usernameFromSipUri } = await import("../../scripts/lib/vapi_web_objects.mjs");
+  assert.equal(usernameFromSipUri("sip:lab_3192b35ff8fd7e68@sip.vapi.ai"), "lab_3192b35ff8fd7e68");
+  assert.equal(usernameFromSipUri("sips:bridgefu@host:5061;transport=tls"), "bridgefu");
+  assert.equal(usernameFromSipUri(""), null);
+  assert.equal(usernameFromSipUri(undefined), null);
+});

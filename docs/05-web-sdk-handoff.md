@@ -21,6 +21,12 @@ mechanism durable and reachable from your laptop with three pieces:
 2. **Vapi objects**: a function tool `bridgefu_direct_handoff`, a dedicated
    assistant that owns only that tool, and a SIP endpoint with digest
    credentials that BridgeFu dials. The credentials live in Secrets Manager.
+   The endpoint's password is registered **once at creation** and written to the
+   host secret in the same step; the lab never PATCHes or rotates it, because
+   repeatedly rotating a `provider: vapi` endpoint's `authentication` can wedge
+   that SIP username at Vapi's gateway (every INVITE then gets `403 Invalid
+   credentials`, and the state survives deleting the number). A fresh username is
+   minted whenever the endpoint is created.
 3. **The host overlay**: a complete replacement `/etc/bridgefu/bridgefu.yaml`
    (the phone recipe plus two named routes, `api.tls`, a public WebSocket bind)
    and a `haproxy.cfg` that allows one extra path, applied over SSM with the

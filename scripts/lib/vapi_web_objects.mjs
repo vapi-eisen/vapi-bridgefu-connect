@@ -10,6 +10,12 @@ import * as common from "./common.mjs";
 import { LabError, log, vapiRequest } from "./common.mjs";
 
 export const TOOL_NAME = "bridgefu_direct_handoff";
+
+/** The user part of a `sip:user@host` URI, or null. */
+export function usernameFromSipUri(sipUri) {
+  const match = /^sips?:([^@]+)@/.exec(String(sipUri ?? ""));
+  return match ? match[1] : null;
+}
 export const ASSISTANT_NAME_PREFIX = "BridgeFu Lab Web Assistant";
 const PROMPT_PATH = join(common.REPO_ROOT, "vapi", "prompts", "lab-web-direct.md");
 export const FIRST_MESSAGE = "Hi, this is Riley from Brightline Mobile support. How can I help you today?";
@@ -110,24 +116,50 @@ export async function create(state) {
   }
 
   const phoneName = `bridgefu-lab-${deployment}-direct`;
-  const username = record.sip_username ?? `lab_${randomBytes(8).toString("hex")}`;
-  const authentication = { realm: "sip.vapi.ai", username, password: randomBytes(24).toString("base64url") };
+  // Digest credentials on the direct Vapi SIP endpoint are set ONCE, at creation, and the identical
+  // password is written to the host secret in the same step so the two never drift. We never PATCH
+  // or rotate `authentication` afterward: repeated rotation can wedge the username at Vapi's SIP
+  // gateway so every INVITE gets 403 "Invalid credentials", and that state survives deleting and
+  // recreating the phone-number object (only a brand-new username recovers). For the same reason a
+  // new endpoint always mints a fresh username rather than reusing a recorded one. See
+  // docs/05-web-sdk-handoff.md and references/troubleshooting.md.
+  //
+  // A recorded endpoint that has since been deleted out from under us (404) is treated as absent so
+  // we mint a fresh identity instead of PATCHing a dead id.
+  if (record.phone_id) {
+    const still = await vapiRequest(state, "GET", `/phone-number/${record.phone_id}`, undefined, { allowMissing: true });
+    if (!still) {
+      log("the recorded direct SIP endpoint no longer exists; minting a fresh one");
+      delete record.phone_id;
+      delete record.sip_username;
+      delete record.sip_uri;
+    }
+  }
+  let username = record.sip_username;
+  let mintedCredentials = null;
   if (!record.phone_id) {
     const existing = (await common.vapiList(state, "phone-number")).filter((p) => p.name === phoneName);
     if (existing.length) {
       record.phone_id = existing[0].id;
-      await vapiRequest(state, "PATCH", `/phone-number/${record.phone_id}`, { assistantId: record.assistant_id, authentication });
-      log("adopting the existing direct SIP endpoint with fresh credentials");
+      username = usernameFromSipUri(existing[0].sipUri) ?? username ?? `lab_${randomBytes(8).toString("hex")}`;
+      await vapiRequest(state, "PATCH", `/phone-number/${record.phone_id}`, { assistantId: record.assistant_id });
+      log("adopting the existing direct SIP endpoint (leaving its registered credentials untouched)");
     } else {
-      const created = await vapiRequest(state, "POST", "/phone-number", { provider: "vapi", name: phoneName, sipUri: `sip:${username}@sip.vapi.ai`, assistantId: record.assistant_id, authentication });
+      username = `lab_${randomBytes(8).toString("hex")}`;
+      mintedCredentials = { realm: "sip.vapi.ai", username, password: randomBytes(24).toString("base64url") };
+      const created = await vapiRequest(state, "POST", "/phone-number", { provider: "vapi", name: phoneName, sipUri: `sip:${username}@sip.vapi.ai`, assistantId: record.assistant_id, authentication: mintedCredentials });
       if (!created?.id) throw new LabError("Vapi did not return a phone number id");
       record.phone_id = created.id;
-      log("created the direct SIP endpoint");
+      log("created the direct SIP endpoint with digest credentials");
     }
   } else {
-    await vapiRequest(state, "PATCH", `/phone-number/${record.phone_id}`, { authentication });
+    username = username ?? `lab_${randomBytes(8).toString("hex")}`;
+    await vapiRequest(state, "PATCH", `/phone-number/${record.phone_id}`, { assistantId: record.assistant_id });
   }
-  await common.putSecretValue(labWeb.DirectVapiSipAuthSecretArn, JSON.stringify(authentication), region);
+  // Write the host secret only when we just minted the credentials (i.e. created the endpoint). On
+  // adopt, the endpoint already holds a password we cannot read back, so the existing secret is
+  // left in place, matching what Vapi has.
+  if (mintedCredentials) await common.putSecretValue(labWeb.DirectVapiSipAuthSecretArn, JSON.stringify(mintedCredentials), region);
   record.sip_username = username;
   record.sip_uri = `sip:${username}@sip.vapi.ai`;
 
