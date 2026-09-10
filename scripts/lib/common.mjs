@@ -5,6 +5,7 @@
 // - every AWS call goes through aws() so failures show the service error text;
 // - state (.lab/state.json) holds identifiers only.
 import { spawn, spawnSync } from "node:child_process";
+import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -365,4 +366,16 @@ export function copyToClipboard(text) {
     if (!result.error && result.status === 0) return true;
   }
   return false;
+}
+
+/** Where doctor installs gh when no package manager is available. */
+export const LOCAL_BIN = join(homedir(), ".local", "bin");
+
+/** The GitHub CLI: on PATH, or the copy doctor installed into ~/.local/bin. */
+export function ghBinary() {
+  for (const candidate of ["gh", join(LOCAL_BIN, "gh")]) {
+    const result = spawnSync(candidate, ["--version"], { stdio: "ignore", timeout: 10_000 });
+    if (!result.error && result.status === 0) return candidate;
+  }
+  return null;
 }

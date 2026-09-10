@@ -163,11 +163,17 @@ their own BridgeFu stack because the product trusts exactly one Vapi assistant.
 
 Open the repository in Claude Code and say **"run the BridgeFu lab in remote
 mode"**. The skill runs the commands below itself; they are listed so you know
-what happens. You need `gh` logged in with write access to this repository
-(dispatching a workflow requires it), Node 22, the Vapi CLI
-(`curl -sSL https://vapi.ai/install.sh | bash`), and access to your own Vapi
-org. Your handle (3 to 24 lowercase letters, digits, or hyphens) becomes the
-deployment id, the hostname `bridgefu-<handle>.<zone>`, and the Connect alias.
+what happens. You need Node 22, an invitation to this repository, and access
+to your own Vapi org. Your handle (3 to 24 lowercase letters, digits, or
+hyphens) becomes the deployment id, the hostname `bridgefu-<handle>.<zone>`,
+and the Connect alias.
+
+0. **Doctor.** `node scripts/lab.mjs remote doctor --fix` installs the GitHub
+   CLI and the Vapi CLI when missing (no sudo: Homebrew or winget, and the
+   Vapi installer writes to `~/.vapi`), signs you in to GitHub with a one-time
+   code, accepts your invitation to this repository, checks the owner's setup,
+   and signs you in to Vapi through the dashboard. Its table names anything
+   left for you to do.
 
 1. **Provision** (20-40 minutes). `remote provision` signs you in to Vapi
    through your browser if needed, wraps your key, and starts the run:

@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import * as common from "./common.mjs";
 import { LabError, log } from "./common.mjs";
+import * as doctor from "./doctor.mjs";
 import * as keyWrap from "./key_wrap.mjs";
 import * as stateCmd from "./state_cmd.mjs";
 
@@ -37,9 +38,13 @@ export const options = {
   "since-minutes": { type: "string", default: "30" },
   "session-id": { type: "string" },
   "keep-connect": { type: "boolean", default: false },
+  fix: { type: "boolean", default: false },
 };
 
-export const help = `remote provision --engineer <handle> [--stages phone|full] [--client-cidr x.x.x.x/32|auto] [--vapi-account <name>] [--vapi-login]
+export const help = `remote doctor [--fix]
+    Checks Node, the GitHub CLI and its sign-in, access to this repository, the owner's setup, the Vapi CLI and its
+    sign-in. With --fix it installs the CLIs, signs you in (relaying the GitHub one-time code), and accepts the invitation.
+remote provision --engineer <handle> [--stages phone|full] [--client-cidr x.x.x.x/32|auto] [--vapi-account <name>] [--vapi-login]
                  [--area-code 415] [--agent-auto-accept true|false] [--connect-alias <alias>] [--repo owner/name] [--ref main]
     Takes your Vapi key from the Vapi CLI login (opening the dashboard to sign in when needed), wraps it for the lab
     account, makes a handout keypair in .lab/, and dispatches ${PROVISION_WORKFLOW}. Prints the run URL.
@@ -287,10 +292,11 @@ export async function teardown(values) {
 
 export async function run(values, positionals) {
   const [action] = positionals;
+  if (action === "doctor") return doctor.doctor(values);
   if (action === "provision") return provision(values);
   if (action === "handout") return handout(values);
   if (action === "agent") return agent(values);
   if (action === "verify") return verify(values);
   if (action === "teardown") return teardown(values);
-  throw new LabError(`remote needs an action: provision | handout | agent | verify | teardown\n${help}`);
+  throw new LabError(`remote needs an action: doctor | provision | handout | agent | verify | teardown\n${help}`);
 }

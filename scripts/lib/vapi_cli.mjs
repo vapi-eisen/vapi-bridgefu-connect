@@ -11,7 +11,29 @@ import { join } from "node:path";
 import { LabError, log } from "./common.mjs";
 
 export const CONFIG_CANDIDATES = [".vapi-cli.yaml", ".vapi-cli.yml"];
-export const INSTALL_HINT = "install the Vapi CLI with `curl -sSL https://vapi.ai/install.sh | bash`, then re-run; it signs you in through the Vapi dashboard";
+export const INSTALL_URL = "https://vapi.ai/install.sh";
+export const INSTALL_HINT = "install the Vapi CLI (node scripts/lab.mjs remote doctor --fix does it, or `curl -sSL https://vapi.ai/install.sh | bash`); it signs you in through the Vapi dashboard";
+
+/** The vapi binary: on PATH, or where the official installer puts it (~/.vapi/bin) before the shell rc is reloaded. */
+export function vapiBinary(home = homedir()) {
+  const candidates = [process.env.VAPI_INSTALL ? join(process.env.VAPI_INSTALL, "bin", "vapi") : null, join(home, ".vapi", "bin", "vapi"), "vapi"].filter(Boolean);
+  for (const candidate of candidates) {
+    const result = spawnSync(candidate, ["--version"], { stdio: "ignore", timeout: 10_000 });
+    if (!result.error && result.status === 0) return candidate;
+  }
+  return null;
+}
+
+/** Runs the official installer (no sudo: it installs into ~/.vapi/bin and edits the shell rc). */
+export function installVapiCli() {
+  log(`installing the Vapi CLI from ${INSTALL_URL} into ~/.vapi/bin`);
+  const result = spawnSync("bash", ["-c", `curl -fsSL ${INSTALL_URL} | bash`], { stdio: ["ignore", "pipe", "pipe"], timeout: 300_000, encoding: "utf8" });
+  if (result.error || result.status !== 0) throw new LabError(`the Vapi CLI installer failed: ${(result.stderr || result.stdout || result.error?.message || "").trim().slice(-400)}`);
+  const binary = vapiBinary();
+  if (!binary) throw new LabError("the installer finished but no vapi binary was found in ~/.vapi/bin or on PATH");
+  log(`Vapi CLI installed at ${binary}`);
+  return binary;
+}
 
 export function configPath(home = homedir()) {
   for (const name of CONFIG_CANDIDATES) {
@@ -99,14 +121,15 @@ export function pickAccount(config, requested) {
 }
 
 export function vapiCliInstalled() {
-  const result = spawnSync("vapi", ["--version"], { stdio: "ignore", timeout: 10_000 });
-  return !result.error && result.status === 0;
+  return vapiBinary() !== null;
 }
 
 /** Runs `vapi auth login` and relays its progress lines (the browser URL) to stderr. */
 export function login({ timeoutMs = 600_000 } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn("vapi", ["auth", "login"], { stdio: ["ignore", "pipe", "pipe"] });
+    const binary = vapiBinary();
+    if (!binary) return reject(new LabError(INSTALL_HINT));
+    const child = spawn(binary, ["auth", "login"], { stdio: ["ignore", "pipe", "pipe"] });
     let buffer = "";
     const relay = (chunk) => {
       buffer += chunk;

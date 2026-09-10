@@ -103,7 +103,9 @@ export function isCiphertext(value) {
 
 // ------------------------------------------------------------ gh and Vapi
 export async function gh(args, { input, allowFailure = false } = {}) {
-  const completed = await common.run("gh", args, { input, timeout: 120_000 });
+  const binary = common.ghBinary();
+  if (!binary) throw new LabError("the GitHub CLI is not installed; run: node scripts/lab.mjs remote doctor --fix");
+  const completed = await common.run(binary, args, { input, timeout: 120_000 });
   if (completed.code !== 0) {
     if (allowFailure) return null;
     throw new LabError(`gh ${args.slice(0, 2).join(" ")} failed: ${(completed.stderr || completed.stdout).trim().slice(0, 600)}`);

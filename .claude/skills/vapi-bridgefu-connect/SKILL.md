@@ -167,15 +167,25 @@ wants to reuse the instance for another run.
 
 Most engineers use this mode. The AWS side runs inside GitHub Actions in a lab
 account the owner manages; you run the `remote` commands, the engineer never
-touches AWS or a terminal. They need `gh` logged in (`gh auth status`), the
-Vapi CLI (`vapi --version`; install: `curl -sSL https://vapi.ai/install.sh | bash`),
-and access to their own Vapi org. If `gh variable get AWS_LAB_ROLE_ARN` fails,
-the owner has not set the repository up: stop and say so.
+touches AWS or a terminal. You also install and sign in whatever is missing.
 
 Keep every message to two or three sentences: what is happening, what you need
 from them. No preambles, no lists of what you checked, no cost essays. Never ask
 for, print, or echo a Vapi key or password; the commands handle them.
 
+0. **Doctor.** First, in the background (it may wait for two browser sign-ins):
+
+```bash
+node scripts/lab.mjs remote doctor --fix
+```
+
+   It installs the GitHub CLI and the Vapi CLI if missing, signs the engineer in
+   to GitHub (relay the one-time code and URL it prints: "copy code XXXX-XXXX,
+   then open github.com/login/device"), accepts their invitation to this
+   repository, checks the owner's setup, and signs them in to Vapi (a browser
+   tab opens: "sign in and pick your org"). Read its table; anything marked
+   `needs you` is the one thing left for a human, and it says what. If it lists
+   several Vapi orgs, ask which one and remember the name for `--vapi-account`.
 1. **Provision.** Agree a handle (3-24 lowercase letters, digits, hyphens; their
    first name works) and `full` (phone + browser demo) or `phone`. Say once:
    "This builds your lab in the shared account (about 30 minutes, roughly $0.10
@@ -186,11 +196,9 @@ for, print, or echo a Vapi key or password; the commands handle them.
 node scripts/lab.mjs remote provision --engineer <handle> --stages full --client-cidr auto
 ```
 
-   If the engineer has no Vapi CLI login yet, a browser tab opens on their
-   machine; tell them to sign in to Vapi there and pick their org. If the output
-   says the Vapi CLI is logged into several orgs, show them the names it lists,
-   ask which one, and re-run with `--vapi-account <name>`. When the command
-   exits it prints the run URL.
+   Add `--vapi-account <name>` when doctor listed several Vapi orgs. If a Vapi
+   sign-in is still needed, a browser tab opens on their machine; say so. When
+   the command exits it prints the run URL.
 2. **Wait and import.** In the background:
 
 ```bash
