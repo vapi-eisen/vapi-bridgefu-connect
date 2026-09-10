@@ -24,14 +24,14 @@ async function checkVersions() {
   if (!awsVersion || !awsVersion.includes("aws-cli/2")) throw new LabError("AWS CLI v2 is required (`aws --version`)");
 }
 
-async function checkZone(zoneId, hostname, region) {
+export async function checkZone(zoneId, hostname, region, { skipRecords = false } = {}) {
   const zone = await aws(["route53", "get-hosted-zone", "--id", zoneId], { region });
   const hosted = zone?.HostedZone ?? {};
   const name = String(hosted.Name ?? "").replace(/\.$/, "").toLowerCase();
   if (!name) throw new LabError(`hosted zone ${zoneId} was not found`);
   if (hosted.Config?.PrivateZone) throw new LabError(`hosted zone ${zoneId} (${name}) is private; the product needs a public zone for ACM validation`);
   if (!hostname.endsWith(`.${name}`) || hostname === name) throw new LabError(`${hostname} is not strictly beneath the zone ${name}`);
-  for (const candidate of [hostname, `control.${hostname}`]) {
+  for (const candidate of skipRecords ? [] : [hostname, `control.${hostname}`]) {
     const records = await aws(["route53", "list-resource-record-sets", "--hosted-zone-id", zoneId, "--start-record-name", candidate, "--max-items", "3"], { region });
     for (const record of records?.ResourceRecordSets ?? []) {
       if (String(record.Name ?? "").replace(/\.$/, "").toLowerCase() === candidate) {
@@ -86,8 +86,14 @@ export async function run(values) {
   await checkVersions();
   const identity = await common.callerIdentity(region);
   log(`AWS account ${identity.accountId} in ${region}`);
-  const zoneName = await checkZone(zoneId, hostname, region);
-  await checkConnectAlias(connectAlias, region);
+  // On a re-run the lab's own stacks already own the DNS records and the Connect alias; only
+  // check for collisions with things this lab did not create.
+  const ownsBridgefu = Boolean(state.bridgefu?.stack_name) && state.sip_hostname === hostname;
+  const ownsConnect = Boolean(state.connect?.stack_name) && state.connect_alias === connectAlias;
+  const zoneName = await checkZone(zoneId, hostname, region, { skipRecords: ownsBridgefu });
+  if (ownsBridgefu) log(`${hostname} records belong to this lab's stack ${state.bridgefu.stack_name}; not treated as a collision`);
+  if (ownsConnect) log(`Connect alias ${connectAlias} belongs to this lab's stack ${state.connect.stack_name}; not treated as a collision`);
+  else await checkConnectAlias(connectAlias, region);
 
   Object.assign(state, {
     region,
