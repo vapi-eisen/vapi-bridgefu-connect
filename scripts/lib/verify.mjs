@@ -101,8 +101,8 @@ async function connectContacts(instanceId, region, since) {
   return contacts.sort((a, b) => String(b.InitiationTimestamp ?? "").localeCompare(String(a.InitiationTimestamp ?? "")));
 }
 
-async function logMatches(group, pattern, region, since) {
-  const value = await aws(["logs", "filter-log-events", "--log-group-name", group, "--start-time", String(since.getTime()), "--filter-pattern", pattern, "--max-items", "50"], { region, allowFailure: true });
+async function logMatches(group, pattern, region, since, maxItems = 50) {
+  const value = await aws(["logs", "filter-log-events", "--log-group-name", group, "--start-time", String(since.getTime()), "--filter-pattern", pattern, "--max-items", String(maxItems)], { region, allowFailure: true });
   return value === null ? null : (value.events ?? []);
 }
 
@@ -268,10 +268,10 @@ export async function run(values, mode) {
   if (runtimeFilter && runtimeGroup) {
     console.log("");
     console.log(`== Bridgefu runtime lines matching ${JSON.stringify(runtimeFilter)} (any level, redacted) ==`);
-    const events = await logMatches(runtimeGroup, runtimeFilter, region, since);
+    const events = await logMatches(runtimeGroup, runtimeFilter, region, since, 500);
     if (events === null) console.log("  unavailable");
     else if (!events.length) console.log("  (none in the window)");
-    else printLogSample(events, values.reveal, 40);
+    else printLogSample(events, values.reveal, 80);
   }
 
   console.log("");
