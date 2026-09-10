@@ -1,6 +1,6 @@
 ---
 name: vapi-bridgefu-connect
-description: Guided lab that deploys, wires, tests, and tears down a Vapi -> BridgeFu -> Amazon Connect handoff (phone call and browser call) in the engineer's own AWS account and Vapi org, using the published BridgeFu CloudFormation release. Use this whenever someone in this repository asks to run, continue, verify, or tear down the BridgeFu lab, deploy Amazon Connect or BridgeFu for a Vapi transfer, wire a Vapi assistant or phone number to BridgeFu, prove a screen pop, run the browser/Web SDK handoff demo, or scope BridgeFu for a Vapi customer, even if they do not say "lab" or "skill". Not for editing BridgeFu itself or for production customer deployments.
+description: Guided lab that deploys, wires, tests, and tears down a Vapi -> BridgeFu -> Amazon Connect handoff (phone call and browser call) in the engineer's own AWS account and Vapi org, using the published BridgeFu CloudFormation release. Use this whenever someone in this repository asks to run, continue, verify, or tear down the BridgeFu lab (including "remote mode" or saying they have no AWS access), deploy Amazon Connect or BridgeFu for a Vapi transfer, wire a Vapi assistant or phone number to BridgeFu, prove a screen pop, run the browser/Web SDK handoff demo, or scope BridgeFu for a Vapi customer, even if they do not say "lab" or "skill". Not for editing BridgeFu itself or for production customer deployments.
 ---
 
 # Vapi -> BridgeFu -> Amazon Connect lab

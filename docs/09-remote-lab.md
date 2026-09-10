@@ -150,6 +150,11 @@ their own BridgeFu stack because the product trusts exactly one Vapi assistant.
 
 ## Engineer flow (no AWS credentials)
 
+With Claude Code, open the repository and say **"run the BridgeFu lab in remote
+mode"**; the skill walks you through exactly these steps and tells you when to
+type the one command that takes your key. The steps are listed here so you know
+what happens.
+
 You need `gh` logged in with write access to this repository (dispatching a
 workflow requires it; check `gh auth status`), Node 22, and the **private** API
 key of your own Vapi org (dashboard, Organization Settings, API Keys). Pick a

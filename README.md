@@ -16,37 +16,56 @@ browser laptop -> Bridgefu (WebRTC) -> Vapi SIP assistant -> [bridgefu_direct_ha
 
 ## Quick start
 
-Prerequisites: **Node 22+** and the **AWS CLI v2** with credentials for a
-disposable account, a public Route53 hosted zone you control, and a Vapi private
-API key. No packages to install.
+The lab is driven by the Claude Code skill in this repository. You clone the
+repo, open Claude Code inside it, and ask for the lab; Claude runs the stages,
+explains what each one proves, confirms before anything that costs money or
+deletes resources, and tells you the few moments you must act yourself.
 
-Pick one way to drive the lab (they all run the same commands):
+### 1. Install the prerequisites
 
-- **Claude Code**: open this repository and say **"run the BridgeFu lab"**. The
-  skill in `.claude/skills/vapi-bridgefu-connect/` sequences the stages, explains
-  each one, and confirms before anything that costs money or deletes resources.
-- **Terminal**:
+Everyone:
+
+- **Claude Code** (the `claude` command, the desktop app, or the IDE extension).
+- **Node 22 or newer** (`node --version`). Nothing to `npm install`.
+- **git** to clone this repository.
+
+Then one of the two ways to run the AWS side:
+
+| | Remote mode (no AWS account, most engineers) | Your own AWS account |
+|---|---|---|
+| Access | An invitation to this repository (accept the email) and the **GitHub CLI** logged in: `gh auth login` | **AWS CLI v2** with credentials for a disposable account in `us-west-2` or `us-east-1` |
+| DNS | Nothing; labs get `bridgefu-<handle>.lab.vapi-internal.com` | A public Route53 hosted zone you control |
+| Vapi | The **private API key of your own Vapi org** (dashboard: Organization Settings, API Keys). It is encrypted on your laptop and only ever decrypted inside the lab account | The same key, stored in your own Secrets Manager |
+
+### 2. Clone and open Claude Code in the folder
 
 ```bash
-node scripts/lab.mjs preflight --region us-west-2 --hosted-zone-id Z0123456789ABC \
-  --sip-hostname bridgefu-lab.example.com --create-vapi-secret     # reads $VAPI_PRIVATE_KEY
-node scripts/lab.mjs connect          # stage 1: Amazon Connect lab instance (5-10 min)
-node scripts/lab.mjs bridgefu         # stage 2: published Bridgefu stack (20-30 min)
-node scripts/lab.mjs vapi             # stage 3: persona + free dial-in number
-node scripts/lab.mjs verify-phone     # stage 4: after your test call
-node scripts/lab.mjs web-setup        # stage 5: browser path add-on
-node scripts/lab.mjs web-serve        # stage 5: http://127.0.0.1:8787
-node scripts/lab.mjs verify-web       # stage 5: after your browser call
-node scripts/lab.mjs teardown         # stage 6
+git clone https://github.com/vapi-eisen/vapi-bridgefu-connect.git && cd vapi-bridgefu-connect && claude
 ```
 
-Roughly $0.10/hour while the lab exists. Read [docs/00-overview.md](docs/00-overview.md) first.
+### 3. Ask for the lab
 
-**No AWS access?** The AWS stages can run in a shared lab account through
-GitHub Actions; engineers then need only GitHub access, Node, and their own
-Vapi org. See [docs/09-remote-lab.md](docs/09-remote-lab.md) for the one-time
-owner setup (`iam/lab-runner.yaml`) and the engineer flow
-(`node scripts/lab.mjs remote provision ...`).
+Say one of these; the skill loads on its own because you are in this folder:
+
+- **"Run the BridgeFu lab in remote mode"** when you have no AWS account. The
+  AWS stages run in the shared lab account through GitHub Actions.
+- **"Run the BridgeFu lab"** when you are using your own AWS account.
+
+Later: "continue the lab at stage 5", "verify my phone call", "tear down the lab".
+
+What you will do by hand, when Claude tells you: type the one command that asks
+for your Vapi key (remote mode; it prompts with hidden input so the key never
+enters the conversation), log into the Amazon Connect Agent Workspace, place
+the phone call, and talk to the browser demo. Everything else is automated.
+
+A lab costs roughly $0.10 per hour while it exists; in remote mode a nightly
+reaper removes labs older than three days. Read
+[docs/00-overview.md](docs/00-overview.md) if you want the architecture before
+you start, and [docs/09-remote-lab.md](docs/09-remote-lab.md) for what remote
+mode does with your key.
+
+The skill drives `node scripts/lab.mjs`; every stage is also a plain command
+(`node scripts/lab.mjs --help`) if you ever need to run one without Claude.
 
 ## What is in the repository
 
