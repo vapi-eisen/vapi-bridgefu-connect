@@ -60,6 +60,20 @@ aws cloudformation deploy --region us-west-2 --stack-name bridgefu-lab-runner \
   --tags Project=vapi-bridgefu-connect
 ```
 
+`GitHubRepository` must match the subject GitHub puts in the OIDC token. Check
+it first, because repositories with GitHub's immutable subject enabled embed
+numeric ids:
+
+```bash
+gh api repos/OWNER/REPO/actions/oidc/customization/sub
+```
+
+If the answer shows `"use_immutable_subject": true`, pass the part of
+`sub_claim_prefix` after `repo:` (for example
+`GitHubRepository=owner@300555177/repo@1364727349`); otherwise plain
+`owner/name`. A mismatch fails every workflow at the credentials step with
+`Not authorized to perform sts:AssumeRoleWithWebIdentity`.
+
 Set `CreateOidcProvider=false` if `aws iam list-open-id-connect-providers`
 already lists `token.actions.githubusercontent.com`. To use an existing public
 zone instead of delegating a new one, pass `HostedZoneId` and `HostedZoneName`

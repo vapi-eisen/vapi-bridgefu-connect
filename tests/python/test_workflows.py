@@ -1,7 +1,6 @@
 import unittest
 
 import yaml
-
 from _support import ROOT, load_cfn
 
 WORKFLOWS = ROOT / ".github" / "workflows"

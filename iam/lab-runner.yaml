@@ -25,8 +25,11 @@ Metadata:
 Parameters:
   GitHubRepository:
     Type: String
-    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
-    Description: owner/name of the repository whose workflows may assume the role.
+    AllowedPattern: '^[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?$'
+    Description: >-
+      Repository whose workflows may assume the role, exactly as GitHub writes it in the token subject.
+      Run `gh api repos/OWNER/REPO/actions/oidc/customization/sub`: when use_immutable_subject is true, copy
+      the part after `repo:` from sub_claim_prefix (owner@ownerId/name@repoId); otherwise plain owner/name.
   GitHubRefSuffix:
     Type: String
     Default: '*'

@@ -204,7 +204,7 @@ def create_route_call(base_url: str, bearer: str, route_id: str, payload: dict[s
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=20) as reply:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=20) as reply:
             raw = reply.read(MAX_RESPONSE_BYTES + 1)
             status = reply.status
     except urllib.error.HTTPError as error:

@@ -16,7 +16,7 @@ class TemplateTests(unittest.TestCase):
     def test_cfn_lint_is_clean(self):
         if shutil.which("cfn-lint") is None:
             self.skipTest("cfn-lint not installed")
-        completed = subprocess.run(["cfn-lint", *map(str, TEMPLATES)], capture_output=True, text=True)
+        completed = subprocess.run(["cfn-lint", *map(str, TEMPLATES)], capture_output=True, text=True, check=False)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
     def test_connect_lab_grants_the_screen_pop_view_permissions(self):
