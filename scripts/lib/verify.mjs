@@ -101,7 +101,59 @@ async function connectContacts(instanceId, region, since) {
 
 async function logMatches(group, pattern, region, since) {
   const value = await aws(["logs", "filter-log-events", "--log-group-name", group, "--start-time", String(since.getTime()), "--filter-pattern", pattern, "--max-items", "50"], { region, allowFailure: true });
-  return value === null ? null : (value.events ?? []).length;
+  return value === null ? null : (value.events ?? []);
+}
+
+const SAMPLE_LINES = 6;
+const SAMPLE_WIDTH = 320;
+// Fields worth reading from a JSON runtime line; everything else (tokens, SDP, headers) stays out.
+const RUNTIME_FIELDS = ["level", "target", "message", "msg", "event", "error", "err", "reason", "code", "status", "leg", "leg_id", "call_id", "route", "route_id", "peer", "uri", "sip_status", "cause"];
+
+/**
+ * One log line reduced to what a person needs in order to open the right runbook. Correlation
+ * ids become fingerprints, long opaque tokens are dropped, and JSON lines keep only known fields.
+ */
+export function redactLogLine(raw, { reveal = false } = {}) {
+  let text = String(raw ?? "").trim();
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") {
+      const fields = { ...parsed, ...(typeof parsed.fields === "object" ? parsed.fields : {}) };
+      const parts = [];
+      for (const key of RUNTIME_FIELDS) {
+        if (fields[key] === undefined || fields[key] === null) continue;
+        const value = typeof fields[key] === "object" ? JSON.stringify(fields[key]) : String(fields[key]);
+        parts.push(`${key}=${value}`);
+      }
+      text = parts.length ? parts.join(" ") : text;
+    }
+  } catch {
+    // not JSON; fall through with the plain text
+  }
+  // Correlation ids are the one long token worth keeping (as fingerprints, or raw with --reveal).
+  const ids = [];
+  text = text.replace(/bf1_[A-Za-z0-9_-]{43}/g, (id) => {
+    ids.push(reveal ? id : `${common.fingerprint(id)} (fingerprint)`);
+    return `\u0000${ids.length - 1}\u0000`;
+  });
+  text = text.replace(/(bearer|token|password|secret|authorization)(["'=:\s]+)[^\s"',}]{8,}/gi, "$1$2<redacted>");
+  text = text.replace(/\b[A-Za-z0-9+/_-]{40,}={0,2}\b/g, "<opaque>");
+  text = text.replace(/\u0000(\d+)\u0000/g, (_, i) => ids[Number(i)]);
+  return text.length > SAMPLE_WIDTH ? `${text.slice(0, SAMPLE_WIDTH)}...` : text;
+}
+
+function printLogSample(events, reveal) {
+  const seen = new Set();
+  let shown = 0;
+  for (const event of events) {
+    const line = redactLogLine(event.message, { reveal });
+    if (seen.has(line)) continue;
+    seen.add(line);
+    const at = event.timestamp ? new Date(Number(event.timestamp)).toISOString() : "";
+    console.log(`      ${at} ${line}`);
+    if (++shown >= SAMPLE_LINES) break;
+  }
+  if (events.length > shown) console.log(`      (${events.length - shown} more; repeated lines collapsed)`);
 }
 
 function summarizeValues(row) {
@@ -203,10 +255,11 @@ export async function run(values, mode) {
   if (mode === "web") groups.push(`/aws/lambda/bridgefu-${deploymentId}-direct-handoff`, `/aws/lambda/bridgefu-${deploymentId}-direct-session`);
   for (const group of groups.filter(Boolean)) {
     const { pattern, label: what } = logFilterFor(group, runtimeGroup);
-    const count = await logMatches(group, pattern, region, since);
-    console.log(`  ${group}: ${count === null ? "unavailable" : `${count} ${what}`}`);
+    const events = await logMatches(group, pattern, region, since);
+    console.log(`  ${group}: ${events === null ? "unavailable" : `${events.length} ${what}`}`);
+    if (events?.length) printLogSample(events, values.reveal);
   }
-  console.log("  (open a group in the CloudWatch console to read the matching lines)");
+  console.log("  (samples above are redacted; open a group in the CloudWatch console for the full lines)");
 
   console.log("");
   console.log("== Checks ==");

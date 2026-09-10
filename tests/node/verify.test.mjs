@@ -27,3 +27,18 @@ test("runtime log group uses a JSON level filter, Lambda groups use text pattern
   const lambda = logFilterFor("/aws/lambda/bridgefu-lab-prepare", "/bridgefu/lab/runtime");
   assert.equal(lambda.pattern, "?ERROR ?Traceback ?internal_error");
 });
+
+test("redactLogLine keeps readable fields and hides ids, tokens, and opaque blobs", async () => {
+  const { redactLogLine } = await import("../../scripts/lib/verify.mjs");
+  const id = `bf1_${"a".repeat(43)}`;
+  const line = JSON.stringify({ level: "ERROR", target: "bridgefu::sip", message: `INVITE failed for ${id}`, sip_status: 403, token: "x".repeat(50), sdp: "v=0\\r\\n".repeat(50) });
+  const out = redactLogLine(line);
+  assert.match(out, /level=ERROR/);
+  assert.match(out, /sip_status=403/);
+  assert.ok(!out.includes(id));
+  assert.ok(!out.includes("x".repeat(50)));
+  assert.ok(!out.includes("v=0"));
+  assert.equal(redactLogLine("Authorization: Bearer abcdefghijklmnop"), "Authorization: Bearer <redacted>");
+  assert.ok(redactLogLine(`plain ${id}`, { reveal: true }).includes(id));
+  assert.ok(redactLogLine("y".repeat(1000)).length < 400);
+});
