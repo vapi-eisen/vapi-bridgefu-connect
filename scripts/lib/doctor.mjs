@@ -184,7 +184,7 @@ export async function doctor(values) {
   const rows = [];
   let pending = 0;
   const report = (check, ok, detail) => {
-    rows.push([check, ok ? "ok" : "needs you", detail]);
+    rows.push([check, `${ok ? "ok       " : "NEEDS YOU"}  ${detail}`]);
     if (!ok) pending += 1;
   };
 
