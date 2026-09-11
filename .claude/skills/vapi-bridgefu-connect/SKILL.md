@@ -173,6 +173,14 @@ Keep every message to two or three sentences: what is happening, what you need
 from them. No preambles, no lists of what you checked, no cost essays. Never ask
 for, print, or echo a Vapi key or password; the commands handle them.
 
+**Frame the session up front.** In your first message, tell the engineer the
+arc so nothing is a surprise: you will build their lab, then run a phone-call
+demo, then a browser-call demo, and finally tear the whole stack down. For
+`phone` scope it is the phone demo then teardown. Then announce each transition
+as it happens: when the phone demo passes, say you are switching to the browser
+demo; when the browser demo passes, say you are tearing the stack down. The
+engineer should always know which of the three parts they are in.
+
 0. **Doctor.** First, in the background (it may wait for two browser sign-ins):
 
 ```bash
@@ -214,10 +222,12 @@ node scripts/lab.mjs remote handout --engineer <handle> --wait
 4. **Phone test.** Give them the dial-in number: call it, ask Riley for a
    person, answer the questions, confirm. Then run
    `node scripts/lab.mjs remote verify --engineer <handle> --mode phone` and
-   summarise the report in a few lines.
+   summarise the report in a few lines. Then tell them the phone demo is done
+   and you are switching to the browser demo (skip to step 6 for `phone` scope).
 5. **Browser demo** (`full` only). Run `node scripts/lab.mjs web-serve` in the
    background, send them to `http://127.0.0.1:8787`, let them talk to Riley and
-   ask for a person, then `remote verify ... --mode web`.
+   ask for a person, then `remote verify ... --mode web`. When it passes, tell
+   them the browser demo is complete and you are now tearing the stack down.
 6. **Teardown.** When they are done, in the background:
    `node scripts/lab.mjs remote teardown --engineer <handle>` (10-20 minutes).
    It also deletes the secret that held their key; they should not rotate the
