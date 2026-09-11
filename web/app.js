@@ -37,6 +37,45 @@ let client = null;
 let muted = false;
 let connectedLegs = 0;
 
+/**
+ * Bridgefu's WebRTC driver binds an IPv4 UDP socket (0.0.0.0:20000-20399). When the browser
+ * advertises an IPv6 host candidate the driver logs "Failed to send to [fd..]: Address family
+ * not supported by protocol (os error 97)" and the attachment fails within the same second.
+ * Until the release handles that, keep IPv6 candidates local: the SDK still sees every IPv4
+ * candidate and the end-of-candidates marker.
+ */
+function candidateAddress(candidate) {
+  return String(candidate?.candidate ?? "").split(" ")[4] ?? "";
+}
+
+function ipv4OnlyEnvironment() {
+  return {
+    createPeerConnection: (configuration) => {
+      const peer = new RTCPeerConnection(configuration);
+      let handler = null;
+      peer.addEventListener("icecandidate", (event) => {
+        if (event.candidate && candidateAddress(event.candidate).includes(":")) {
+          addEvent("skipped an IPv6 candidate (Bridgefu media is IPv4-only)");
+          return;
+        }
+        handler?.(event);
+      });
+      Object.defineProperty(peer, "onicecandidate", {
+        configurable: true,
+        get: () => handler,
+        set: (fn) => {
+          handler = fn;
+        },
+      });
+      return peer;
+    },
+    createWebSocket: (url, protocols) => new WebSocket(url, protocols),
+    getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
+    now: () => Date.now(),
+    randomId: () => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+  };
+}
+
 function setStatus(text) {
   el.status.textContent = text;
 }
@@ -92,9 +131,9 @@ function wire(value) {
       client = null;
     }
   });
-  value.on("handoff", ({ status }) => {
+  value.on("handoff", ({ status, detail }) => {
     el.caption.textContent = CAPTIONS[status] ?? "";
-    addEvent(`handoff ${status}`);
+    addEvent(`handoff ${status}${detail ? ` (${detail})` : ""}`);
     if (status === "connected") {
       connectedLegs += 1;
       if (connectedLegs === 1) {
@@ -119,7 +158,7 @@ function wire(value) {
     client = null;
   });
   value.on("error", ({ error }) => {
-    addEvent(`error ${error?.code ?? error?.name ?? "unknown"}`);
+    addEvent(`error ${error?.code ?? error?.name ?? "unknown"}${error?.message ? `: ${error.message}` : ""}`);
     setStatus("Something went wrong. See the timeline.");
   });
 }
@@ -141,6 +180,7 @@ async function start() {
       legId: session.leg_id,
     });
     client = new BridgefuWebRtcClient({
+      environment: ipv4OnlyEnvironment(),
       remoteAudioElement: el.remote,
       connectTimeoutMs: 30_000,
       disconnectGraceMs: 2_000,
