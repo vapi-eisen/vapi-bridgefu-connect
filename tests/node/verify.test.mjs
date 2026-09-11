@@ -42,3 +42,13 @@ test("redactLogLine keeps readable fields and hides ids, tokens, and opaque blob
   assert.ok(redactLogLine(`plain ${id}`, { reveal: true }).includes(id));
   assert.ok(redactLogLine("y".repeat(1000)).length < 400);
 });
+
+test("sipAuthRejection detects a 403 on the Bridgefu-to-Vapi SIP leg", async () => {
+  const { sipAuthRejection } = await import("../../scripts/lib/verify.mjs");
+  const rejected = [{ message: "[handle_call_failed] session=x status=403 CallFailureDiagnostics { reason_present: true }" }];
+  const okleg = [{ message: "State transition: Answering -> Active" }, { message: "status=200" }];
+  assert.equal(sipAuthRejection(rejected), true);
+  assert.equal(sipAuthRejection([{ message: "Auth-retry INVITE sent (retry #1, header Authorization)" }]), false);
+  assert.equal(sipAuthRejection(okleg), false);
+  assert.equal(sipAuthRejection([]), false);
+});

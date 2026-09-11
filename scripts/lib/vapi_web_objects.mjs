@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as common from "./common.mjs";
+import * as sipProbe from "./sip_probe.mjs";
 import { LabError, log, vapiRequest } from "./common.mjs";
 
 export const TOOL_NAME = "bridgefu_direct_handoff";
@@ -145,12 +146,30 @@ export async function create(state) {
       await vapiRequest(state, "PATCH", `/phone-number/${record.phone_id}`, { assistantId: record.assistant_id });
       log("adopting the existing direct SIP endpoint (leaving its registered credentials untouched)");
     } else {
-      username = `lab_${randomBytes(8).toString("hex")}`;
-      mintedCredentials = { realm: "sip.vapi.ai", username, password: randomBytes(24).toString("base64url") };
-      const created = await vapiRequest(state, "POST", "/phone-number", { provider: "vapi", name: phoneName, sipUri: `sip:${username}@sip.vapi.ai`, assistantId: record.assistant_id, authentication: mintedCredentials });
-      if (!created?.id) throw new LabError("Vapi did not return a phone number id");
-      record.phone_id = created.id;
-      log("created the direct SIP endpoint with digest credentials");
+      // Create the endpoint, then confirm it actually authenticates over SIP before trusting it. A
+      // username Vapi has wedged answers every digest with 403; if that happens, discard it and mint
+      // another (up to three tries). A timeout/socket result is inconclusive, so keep the endpoint.
+      const sipHostname = state.sip_hostname ?? "lab.invalid";
+      for (let attempt = 1; ; attempt++) {
+        username = `lab_${randomBytes(8).toString("hex")}`;
+        mintedCredentials = { realm: "sip.vapi.ai", username, password: randomBytes(24).toString("base64url") };
+        const created = await vapiRequest(state, "POST", "/phone-number", { provider: "vapi", name: phoneName, sipUri: `sip:${username}@sip.vapi.ai`, assistantId: record.assistant_id, authentication: mintedCredentials });
+        if (!created?.id) throw new LabError("Vapi did not return a phone number id");
+        record.phone_id = created.id;
+        const health = await sipProbe.probeDigest({ username, password: mintedCredentials.password, target: `sip:${username}@sip.vapi.ai:5061;transport=tls`, fromUri: `sips:bridgefu@${sipHostname}` });
+        if (health.ok) {
+          log("created the direct SIP endpoint with digest credentials (verified it authenticates)");
+          break;
+        }
+        if (health.status !== 403) {
+          log(`created the direct SIP endpoint; could not verify it over SIP (${health.reason}) - continuing`);
+          break;
+        }
+        log(`the new SIP username 403s auth at Vapi's gateway (attempt ${attempt}); discarding it and minting another`);
+        await vapiRequest(state, "DELETE", `/phone-number/${created.id}`, undefined, { allowMissing: true });
+        record.phone_id = undefined;
+        if (attempt >= 3) throw new LabError("the direct Vapi SIP endpoint answers auth with 403 after three fresh usernames; Vapi's SIP gateway may be rejecting new endpoints - see references/troubleshooting.md");
+      }
     }
   } else {
     username = username ?? `lab_${randomBytes(8).toString("hex")}`;

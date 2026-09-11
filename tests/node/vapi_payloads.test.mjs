@@ -78,3 +78,11 @@ test("usernameFromSipUri extracts the user part and tolerates junk", async () =>
   assert.equal(usernameFromSipUri(""), null);
   assert.equal(usernameFromSipUri(undefined), null);
 });
+
+test("areaCodeHints extracts only the suggested codes, not the HTTP status", async () => {
+  const { areaCodeHints } = await import("../../scripts/lib/vapi_phone.mjs");
+  const message = 'Vapi POST /phone-number failed with HTTP 400: {"message":"This area code is currently not available. Hint: Try one of 575, 804, 571.","statusCode":400}';
+  assert.deepEqual(areaCodeHints(message), ["575", "804", "571"]);
+  assert.deepEqual(areaCodeHints("no hint here"), []);
+  assert.deepEqual(areaCodeHints(undefined), []);
+});

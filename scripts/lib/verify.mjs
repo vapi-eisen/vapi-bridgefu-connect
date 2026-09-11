@@ -41,6 +41,14 @@ export function transferVerdict(mode, calls, rows) {
   return ended ? "FAIL (call ended but the handoff tool never fired; check the direct-handoff Lambda logs)" : "UNKNOWN";
 }
 
+/** True when runtime log events show Bridgefu's SIP INVITE to Vapi rejected at auth (a 403). Pure. */
+export function sipAuthRejection(events) {
+  return (events ?? []).some((event) => {
+    const line = String(event?.message ?? event ?? "");
+    return /\b403\b/.test(line) && /Invalid credentials|Forbidden|bridgefu-to-vapi|SendINVITEWithAuth|handle_call_failed/i.test(line);
+  });
+}
+
 /** CloudWatch filter and label per log group: Lambda text patterns, JSON level for the Bridgefu runtime. */
 export function logFilterFor(group, runtimeGroup) {
   if (runtimeGroup && group === runtimeGroup) return { pattern: '{ $.level = "ERROR" || $.level = "error" }', label: "error-level runtime log lines" };
@@ -272,6 +280,20 @@ export async function run(values, mode) {
     if (events === null) console.log("  unavailable");
     else if (!events.length) console.log("  (none in the window)");
     else printLogSample(events, values.reveal, 80);
+  }
+
+  if (mode === "web" && runtimeGroup) {
+    const sipEvents = await logMatches(runtimeGroup, "?403 ?SendINVITEWithAuth ?bridgefu-to-vapi", region, since, 200);
+    if (sipEvents && sipAuthRejection(sipEvents)) {
+      console.log("");
+      console.log("== DIAGNOSIS: Bridgefu's SIP INVITE to Vapi was rejected (403) ==");
+      console.log("  Bridgefu dialed the direct Vapi SIP endpoint and Vapi rejected the digest with 403,");
+      console.log("  so the browser attachment was torn down (the page shows signaling-failed). The most");
+      console.log("  common cause is a direct SIP username wedged at Vapi's gateway - it answers every");
+      console.log("  digest with 403 - usually after its `authentication` was rotated. Fix: delete the");
+      console.log("  bridgefu-lab-<id>-direct number and re-run web-setup (or remote provision) so a fresh");
+      console.log("  username is minted; current web-setup does this and verifies it. See troubleshooting.md.");
+    }
   }
 
   console.log("");

@@ -24,6 +24,56 @@ async function findByName(state, name) {
   return matches[0] ?? null;
 }
 
+/** Three-digit area codes from a Vapi "not available" error's "Try one of ..." hint. Pure. */
+export function areaCodeHints(message) {
+  const hint = /try one of ([\d,\s]+)/i.exec(String(message ?? ""));
+  return hint ? [...new Set(hint[1].match(/\d{3}/g) ?? [])] : [];
+}
+
+/** POST a phone number, resolving the VapiAmbiguousWrite race by finding it by name. */
+async function postPhoneNumber(state, payload, name) {
+  let phone;
+  try {
+    phone = await vapiRequest(state, "POST", "/phone-number", payload);
+  } catch (error) {
+    if (!(error instanceof common.VapiAmbiguousWrite)) throw error;
+    await sleep(3000);
+    phone = await findByName(state, name);
+    if (!phone) throw error;
+  }
+  if (!phone?.id) throw new LabError("Vapi did not return a phone number object");
+  return phone;
+}
+
+/**
+ * Get a free Vapi number in `desired`, falling back to the area codes Vapi suggests when it is
+ * unavailable rather than failing the whole run. Vapi returns HTTP 400 "This area code is currently
+ * not available. Hint: Try one of 575, 804, 571." when a code is exhausted.
+ */
+async function createFreeNumber(state, name, assistantId, desired) {
+  const tried = new Set();
+  const queue = [desired];
+  let lastError;
+  while (queue.length && tried.size < 6) {
+    const code = queue.shift();
+    if (tried.has(code)) continue;
+    tried.add(code);
+    try {
+      const phone = await postPhoneNumber(state, { provider: "vapi", name, assistantId, numberDesiredAreaCode: code }, name);
+      if (code !== desired) log(`area code ${desired} was unavailable; used ${code} instead`);
+      return phone;
+    } catch (error) {
+      const message = String(error?.message ?? "");
+      if (!/area code.{0,40}not available/i.test(message)) throw error;
+      lastError = error;
+      const hints = areaCodeHints(message).filter((hint) => !tried.has(hint));
+      queue.push(...hints);
+      log(`area code ${code} is not available at Vapi${hints.length ? `; trying ${hints[0]}` : ""}`);
+    }
+  }
+  throw lastError ?? new LabError("could not obtain a free Vapi number in any area code");
+}
+
 async function waitActive(state, phoneId) {
   const deadline = Date.now() + 90_000;
   let phone = {};
@@ -65,22 +115,12 @@ export async function wire(values, state, assistantId) {
       log("a lab number with the expected name already exists in Vapi; adopting it");
       if (phone.assistantId !== assistantId) await vapiRequest(state, "PATCH", `/phone-number/${phone.id}`, { assistantId });
     } else {
-      const payload = { provider: "vapi", name, assistantId };
       if (mode === "free") {
         if (!/^\d{3}$/.test(values["area-code"])) throw new LabError("--area-code must be three digits");
-        payload.numberDesiredAreaCode = values["area-code"];
+        phone = await createFreeNumber(state, name, assistantId, values["area-code"]);
       } else {
-        payload.sipUri = `sip:lab_${randomBytes(8).toString("hex")}@sip.vapi.ai`;
+        phone = await postPhoneNumber(state, { provider: "vapi", name, assistantId, sipUri: `sip:lab_${randomBytes(8).toString("hex")}@sip.vapi.ai` }, name);
       }
-      try {
-        phone = await vapiRequest(state, "POST", "/phone-number", payload);
-      } catch (error) {
-        if (!(error instanceof common.VapiAmbiguousWrite)) throw error;
-        await sleep(3000);
-        phone = await findByName(state, name);
-        if (!phone) throw error;
-      }
-      if (!phone?.id) throw new LabError("Vapi did not return a phone number object");
       phone = (await waitActive(state, phone.id)) ?? phone;
     }
     record = { id: phone.id, mode, number: phone.number ?? null, sipUri: phone.sipUri ?? null, previous_assistant_id: null, created_by_lab: true };

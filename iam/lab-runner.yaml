@@ -288,7 +288,7 @@ Resources:
                     - ZoneName: !If [CreateLabZone, !Sub '${LabSubdomain}.${ParentZoneName}', !Ref HostedZoneName]
           - Sid: DnsReads
             Effect: Allow
-            Action: [route53:ListResourceRecordSets, route53:GetHostedZone, route53:GetHostedZoneCount, route53:GetDNSSEC]
+            Action: [route53:ListResourceRecordSets, route53:GetHostedZone, route53:GetHostedZoneCount, route53:GetDNSSEC, route53:ListQueryLoggingConfigs, route53:GetQueryLoggingConfig]
             Resource: !Sub 'arn:${AWS::Partition}:route53:::hostedzone/*'
           - Sid: DnsGlobal
             Effect: Allow
