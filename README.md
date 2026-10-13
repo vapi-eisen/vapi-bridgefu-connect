@@ -31,7 +31,7 @@ That is all for **remote mode**, which most engineers use. Claude installs the
 GitHub CLI and the Vapi CLI if they are missing, signs you in to both (GitHub
 puts a one-time code on your clipboard and opens the page; Vapi opens its
 dashboard where you pick your org), and runs the AWS side in the shared lab
-account through GitHub Actions. You need access to a Vapi org; the lab creates
+account (CodeBuild, started through the lab gateway). You need access to a Vapi org; the lab creates
 its assistants and a free phone number there. Your Vapi key never leaves your
 machine unencrypted.
 
@@ -50,7 +50,7 @@ git clone https://github.com/vapi-eisen/vapi-bridgefu-connect.git && cd vapi-bri
 Say one of these; the skill loads on its own because you are in this folder:
 
 - **"Run the BridgeFu lab in remote mode"** when you have no AWS account. The
-  AWS stages run in the shared lab account through GitHub Actions.
+  AWS stages run in the shared lab account; your GitHub sign-in is your pass.
 - **"Run the BridgeFu lab"** when you are using your own AWS account.
 
 Later: "continue the lab at stage 5", "verify my phone call", "tear down the lab".
@@ -79,7 +79,7 @@ The skill drives `node scripts/lab.mjs`; every stage is also a plain command
 | `.claude/skills/vapi-bridgefu-connect/` | The skill (`SKILL.md`) plus definition-of-done and troubleshooting references |
 | `cloudformation/connect-lab.yaml` | Nonproduction Connect instance, queue, flow, agent |
 | `cloudformation/lab-web.yaml` | Browser-path add-on: SG rules, secrets, the released handoff Lambda, the lab session Lambda, HTTP API |
-| `iam/lab-runner.yaml`, `.github/workflows/` | Remote mode: GitHub OIDC runner role, state bucket, and the provision, verify, teardown, and nightly reaper workflows |
+| `iam/lab-runner.yaml`, `lambda/lab_gateway/`, `remote-lab.json` | Remote mode: the bounded runner role and its CodeBuild project, the gateway Lambda URL (checks GitHub repository access), state bucket, nightly reaper; `remote-lab.json` holds the gateway URL |
 | `lambda/direct_session/handler.py` | The one new Lambda (runs in AWS): mints the browser attachment and stages the handoff row |
 | `host/` | Bridgefu host overlay templates (HAProxy config, install and restore scripts) |
 | `scripts/lab.mjs`, `scripts/lib/` | The CLI: Node 22, standard library only, AWS through the AWS CLI |

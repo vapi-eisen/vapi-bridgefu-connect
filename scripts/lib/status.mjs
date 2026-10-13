@@ -21,7 +21,7 @@ export async function run(values) {
       rows.push([`stack ${kind}`, `${name}: ${(await common.stackStatus(name, state.region)) ?? "absent"}`]);
     }
   }
-  if (state.remote) rows.push(["mode", `remote: GitHub Actions in the lab account via ${state.remote.repo ?? "the repository"}`]);
+  if (state.remote) rows.push(["mode", `remote: the shared lab account via ${state.remote.gateway ?? "the lab gateway"}`]);
   const connect = state.connect?.outputs ?? {};
   if (connect.ConnectLoginUrl) rows.push(["agent workspace", String(connect.ConnectLoginUrl)]);
   if (connect.AgentUsername) rows.push(["agent username", String(connect.AgentUsername)]);

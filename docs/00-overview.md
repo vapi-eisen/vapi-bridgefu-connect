@@ -119,5 +119,5 @@ node scripts/lab.mjs preflight --region us-west-2 --hosted-zone-id Z0123456789AB
 
 Costs and limits are in [07-costs-and-limits.md](07-costs-and-limits.md); the
 customer discovery checklist for FDEs is [08-scoping-checklist.md](08-scoping-checklist.md).
-Engineers without AWS access run the AWS stages through GitHub Actions in a
-shared lab account: [09-remote-lab.md](09-remote-lab.md).
+Engineers without AWS access run the AWS stages in a shared lab account
+(CodeBuild, started through a gateway that checks their GitHub repository access): [09-remote-lab.md](09-remote-lab.md).

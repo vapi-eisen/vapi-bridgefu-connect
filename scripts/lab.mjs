@@ -13,10 +13,12 @@
 //   web-overlay  stage 5: apply | restore | status | render for the Bridgefu host overlay
 //   lab-web-stack stage 5: only (re)deploy the lab-web stack
 //   status       show recorded state and stack statuses
-//   state        export | import | push | pull | delete state (handouts for engineers without AWS, CI)
+//   state        export | import | push | pull | delete state (handouts for engineers without AWS, the runner)
 //   remote       doctor | provision | handout | agent | verify | teardown: engineer side of remote mode (no AWS)
 //   key          wrap | unwrap | public-key: the key wrapping behind remote mode
-//   reap         tear down stale labs listed in the S3 state bucket (nightly CI)
+//   owner        deploy: the lab account's sandbox stack and remote-mode gateway (owner, AWS admin)
+//   runner       run the job the gateway queued (inside the lab account's CodeBuild project only)
+//   reap         tear down stale labs listed in the S3 state bucket (nightly, from the runner)
 //   teardown     stage 6: remove everything in a safe order
 import { parseArgs } from "node:util";
 import * as bridgefuStack from "./lib/bridgefu_stack.mjs";
@@ -24,10 +26,12 @@ import { LabError } from "./lib/common.mjs";
 import * as connectStack from "./lib/connect_stack.mjs";
 import * as keyWrap from "./lib/key_wrap.mjs";
 import * as labWebStack from "./lib/lab_web_stack.mjs";
+import * as owner from "./lib/owner.mjs";
 import * as preflight from "./lib/preflight.mjs";
 import * as reap from "./lib/reap.mjs";
 import * as remote from "./lib/remote.mjs";
 import * as runWeb from "./lib/run_web.mjs";
+import * as runner from "./lib/runner.mjs";
 import * as stateCmd from "./lib/state_cmd.mjs";
 import * as status from "./lib/status.mjs";
 import * as teardown from "./lib/teardown.mjs";
@@ -50,8 +54,10 @@ export const COMMANDS = {
   status: { module: status, run: status.run, help: "show lab state" },
   remote: { module: remote, run: remote.run, help: "doctor | provision | handout | agent | verify | teardown: run the lab in the shared account with your own Vapi org, no AWS access needed", positionals: true },
   key: { module: keyWrap, run: keyWrap.run, help: "wrap | unwrap | public-key: carry an engineer's own Vapi key into the lab account (remote mode)", positionals: true },
-  state: { module: stateCmd, run: stateCmd.run, help: "export | import | push | pull | delete lab state (handouts, CI, S3)", positionals: true },
-  reap: { module: reap, run: reap.run, help: "tear down labs older than --max-age-days from the S3 state bucket (CI)" },
+  state: { module: stateCmd, run: stateCmd.run, help: "export | import | push | pull | delete lab state (handouts, runner, S3)", positionals: true },
+  owner: { module: owner, run: owner.run, help: "deploy: the lab account's sandbox stack and remote-mode gateway (lab owner, AWS admin)", positionals: true },
+  runner: { module: runner, run: runner.run, help: "run the job the remote-mode gateway queued (lab account CodeBuild only)" },
+  reap: { module: reap, run: reap.run, help: "tear down labs older than --max-age-days from the S3 state bucket (nightly runner job)" },
   teardown: { module: teardown, run: teardown.run, help: "stage 6: remove everything" },
 };
 

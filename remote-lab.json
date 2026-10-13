@@ -1,0 +1,5 @@
+{
+  "gateway_url": "https://3tthagr3lkbzvy6kmip42n22vq0yhqqo.lambda-url.us-west-2.on.aws/",
+  "region": "us-west-2",
+  "stack": "bridgefu-lab-runner"
+}

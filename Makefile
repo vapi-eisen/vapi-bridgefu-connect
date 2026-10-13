@@ -1,6 +1,6 @@
 NODE ?= node
 PYTHON ?= python3
-MJS := scripts/lab.mjs web/server.mjs web/lib/static.mjs $(wildcard scripts/lib/*.mjs)
+MJS := scripts/lab.mjs web/server.mjs web/lib/static.mjs lambda/lab_gateway/index.mjs $(wildcard scripts/lib/*.mjs)
 
 .PHONY: check lint templates syntax node-test py-test
 

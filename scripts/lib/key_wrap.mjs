@@ -7,26 +7,26 @@
 // provisioner Lambda creates the template assistant with it), so the key has to
 // get there. It travels as an RSA-OAEP ciphertext made on the engineer's laptop
 // with the public half of the sandbox's KMS key. Only the runner role can
-// decrypt it, inside the workflow, where it lands in a per-engineer secret that
-// teardown deletes. The ciphertext names the engineer and expires after an
-// hour, so a copied workflow input cannot be replayed later or for someone else.
+// decrypt it, inside the lab runner (CodeBuild), where it lands in a per-engineer
+// secret that teardown deletes. The ciphertext names the engineer and expires
+// after an hour, so a copied job request cannot be replayed later or for someone else.
 import { constants, createPublicKey, publicEncrypt } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as common from "./common.mjs";
 import { LabError, log } from "./common.mjs";
+import * as gateway from "./gateway_client.mjs";
 import * as vapiCli from "./vapi_cli.mjs";
 
 export const WRAP_VERSION = 1;
 export const WRAP_TTL_SECONDS = 3600;
-export const PUBLIC_KEY_VARIABLE = "LAB_WRAP_PUBLIC_KEY";
 export const KEY_ARN_VARIABLE = "LAB_WRAP_KEY_ARN";
 export const DEFAULT_KEY_ALIAS = "alias/bridgefu-lab-wrap";
 
 export const options = {
   engineer: { type: "string" },
-  repo: { type: "string" },
+  gateway: { type: "string" },
   "public-key": { type: "string" },
   wrapped: { type: "string" },
   "key-arn": { type: "string" },
@@ -36,13 +36,13 @@ export const options = {
   "vapi-login": { type: "boolean", default: false },
 };
 
-export const help = `key wrap --engineer <handle> [--repo owner/name] [--public-key <base64 DER | PEM file>] [--vapi-account <name>] [--vapi-login] [--skip-vapi-check]
+export const help = `key wrap --engineer <handle> [--gateway https://...] [--public-key <base64 DER | PEM file>] [--vapi-account <name>] [--vapi-login] [--skip-vapi-check]
     Takes YOUR Vapi private key from the Vapi CLI login (signing you in through the dashboard when needed; $VAPI_PRIVATE_KEY
-    overrides), checks it against the Vapi API and prints a one-hour ciphertext for the workflow input vapi_key_wrapped.
+    overrides), checks it against the Vapi API and prints a one-hour ciphertext (remote provision does this for you).
 key unwrap --engineer <handle> [--wrapped <ciphertext> | $LAB_WRAPPED_KEY] [--key-arn <kms arn> | $${KEY_ARN_VARIABLE}] [--region r]
-    (CI) Decrypts with KMS and stores the key in secret bridgefu/<handle>/vapi-private-key, recorded in the lab state.
+    (lab runner) Decrypts with KMS and stores the key in secret bridgefu/<handle>/vapi-private-key, recorded in the lab state.
 key public-key [--key-arn <kms arn or alias>] [--region r]
-    (owner) Prints the base64 public key to publish as the ${PUBLIC_KEY_VARIABLE} repository variable.`;
+    (owner) Prints the base64 public key the gateway serves to engineers.`;
 
 // ------------------------------------------------------------ pure functions
 export function assertEngineer(engineer) {
@@ -101,35 +101,7 @@ export function isCiphertext(value) {
   return text.length >= 256 && /^[A-Za-z0-9+/]+={0,2}$/.test(text);
 }
 
-// ------------------------------------------------------------ gh and Vapi
-export async function gh(args, { input, allowFailure = false } = {}) {
-  const binary = common.ghBinary();
-  if (!binary) throw new LabError("the GitHub CLI is not installed; run: node scripts/lab.mjs remote doctor --fix");
-  const completed = await common.run(binary, args, { input, timeout: 120_000 });
-  if (completed.code !== 0) {
-    if (allowFailure) return null;
-    throw new LabError(`gh ${args.slice(0, 2).join(" ")} failed: ${(completed.stderr || completed.stdout).trim().slice(0, 600)}`);
-  }
-  return completed.stdout.trim();
-}
-
-export async function resolveRepo(explicit) {
-  if (explicit) {
-    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(explicit)) throw new LabError("--repo must be owner/name");
-    return explicit;
-  }
-  const name = await gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], { allowFailure: true });
-  if (!name) throw new LabError("could not determine the GitHub repository; pass --repo owner/name and check `gh auth status`");
-  return name;
-}
-
-export async function fetchPublicKey(repo) {
-  const value = await gh(["variable", "get", PUBLIC_KEY_VARIABLE, "--repo", repo], { allowFailure: true });
-  if (!value) throw new LabError(`repository variable ${PUBLIC_KEY_VARIABLE} is not set on ${repo}; the lab owner publishes it (docs/09-remote-lab.md)`);
-  publicKeyObject(value);
-  return value;
-}
-
+// ------------------------------------------------------------ Vapi
 export async function checkVapiKey(key) {
   let response;
   try {
@@ -190,11 +162,12 @@ export async function wrap(values) {
     material = existsSync(values["public-key"]) ? readFileSync(values["public-key"], "utf8") : values["public-key"];
     publicKeyObject(material);
   } else {
-    material = await fetchPublicKey(await resolveRepo(values.repo));
+    material = (await gateway.labConfig({ gateway: values.gateway })).wrap_public_key;
+    publicKeyObject(material);
   }
   const key = await obtainKey(values);
   const ciphertext = wrapPayload(buildWrapPayload({ engineer, key }), material);
-  log(`wrapped for ${engineer}; valid ${WRAP_TTL_SECONDS / 60} minutes; only the lab account's KMS key can open it. Pass it as the workflow input vapi_key_wrapped.`);
+  log(`wrapped for ${engineer}; valid ${WRAP_TTL_SECONDS / 60} minutes; only the lab account's KMS key can open it.`);
   process.stdout.write(`${ciphertext}\n`);
   return ciphertext;
 }
@@ -223,7 +196,7 @@ export async function unwrap(values) {
   const wrapped = (values.wrapped ?? process.env.LAB_WRAPPED_KEY ?? "").trim();
   if (!wrapped) throw new LabError("pass --wrapped <ciphertext> or set LAB_WRAPPED_KEY");
   if (looksLikeRawVapiKey(wrapped)) {
-    throw new LabError("that is a RAW Vapi key, not a wrapped one. Rotate it in the Vapi dashboard now (workflow inputs are visible to collaborators), then run `node scripts/lab.mjs key wrap` locally and pass its output");
+    throw new LabError("that is a RAW Vapi key, not a wrapped one. Rotate it in the Vapi dashboard now (job requests are visible to the lab account's administrators), then run `node scripts/lab.mjs key wrap` locally and pass its output");
   }
   if (!isCiphertext(wrapped)) throw new LabError("the wrapped key is not the base64 ciphertext printed by `key wrap`");
   const keyArn = values["key-arn"] ?? process.env[KEY_ARN_VARIABLE];

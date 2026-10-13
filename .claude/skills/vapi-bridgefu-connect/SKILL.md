@@ -165,8 +165,9 @@ wants to reuse the instance for another run.
 
 ## Remote mode: the engineer has no AWS access
 
-Most engineers use this mode. The AWS side runs inside GitHub Actions in a lab
-account the owner manages; you run the `remote` commands, the engineer never
+Most engineers use this mode. The AWS side runs in CodeBuild in a lab account
+the owner manages, started through the lab gateway (its URL is in
+`remote-lab.json`; the engineer's GitHub sign-in is their pass); you run the `remote` commands, the engineer never
 touches AWS or a terminal. You also install and sign in whatever is missing.
 
 Keep every message to two or three sentences: what is happening, what you need
@@ -190,7 +191,7 @@ node scripts/lab.mjs remote doctor --fix
    It installs the GitHub CLI and the Vapi CLI if missing, signs the engineer in
    to GitHub (relay the one-time code and URL it prints: "copy code XXXX-XXXX,
    then open github.com/login/device"), accepts their invitation to this
-   repository, checks the owner's setup, and signs them in to Vapi (a browser
+   repository, checks that the lab gateway answers, and signs them in to Vapi (a browser
    tab opens: "sign in and pick your org"). Read its table; anything marked
    `needs you` is the one thing left for a human, and it says what. If it lists
    several Vapi orgs, ask which one and remember the name for `--vapi-account`.
@@ -206,14 +207,14 @@ node scripts/lab.mjs remote provision --engineer <handle> --stages full --client
 
    Add `--vapi-account <name>` when doctor listed several Vapi orgs. If a Vapi
    sign-in is still needed, a browser tab opens on their machine; say so. When
-   the command exits it prints the run URL.
+   the command exits it prints the job id.
 2. **Wait and import.** In the background:
 
 ```bash
 node scripts/lab.mjs remote handout --engineer <handle> --wait
 ```
 
-   It waits for the run (20-40 minutes), imports the handout, and prints the
+   It waits for the job (20-40 minutes), imports the handout, and prints the
    dial-in number, the Agent Workspace URL, and the agent username. While it
    runs, offer a two-sentence explanation of what is being built if they want it.
 3. **Agent login.** Run `node scripts/lab.mjs remote agent`. It opens the Agent
@@ -236,6 +237,8 @@ node scripts/lab.mjs remote handout --engineer <handle> --wait
 Never run `connect`, `bridgefu`, `web-setup`, `verify-*`, `teardown`, or
 `key unwrap` locally in remote mode. A run that fails with `AccessDenied` hit a
 guardrail of the bounded runner role; see `references/troubleshooting.md`.
+A failed job prints the last lines of its log; read them before retrying. The
+engineer cannot see CodeBuild, so never send them to the AWS console.
 ## Scoping conversations
 
 When the engineer is preparing for a customer rather than running the lab,

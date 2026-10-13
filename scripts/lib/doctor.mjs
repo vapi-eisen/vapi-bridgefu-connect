@@ -12,10 +12,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as common from "./common.mjs";
 import { LabError, log } from "./common.mjs";
-import * as keyWrap from "./key_wrap.mjs";
+import * as gateway from "./gateway_client.mjs";
 import * as vapiCli from "./vapi_cli.mjs";
 
 export const MIN_NODE_MAJOR = 22;
+
+async function gh(args, { allowFailure = false } = {}) {
+  const binary = common.ghBinary();
+  if (!binary) throw new LabError("the GitHub CLI is not installed; run: node scripts/lab.mjs remote doctor --fix");
+  const completed = await common.run(binary, args, { timeout: 120_000 });
+  if (completed.code !== 0) {
+    if (allowFailure) return null;
+    throw new LabError(`gh ${args.slice(0, 2).join(" ")} failed: ${(completed.stderr || completed.stdout).trim().slice(0, 600)}`);
+  }
+  return completed.stdout.trim();
+}
 
 // ------------------------------------------------------------ pure helpers
 export function parseRepoFromRemote(url) {
@@ -86,7 +97,7 @@ async function downloadGh() {
   return existsSync(join(common.LOCAL_BIN, "gh"));
 }
 
-function repoFromGit() {
+export function repoFromGit() {
   const result = spawnSync("git", ["remote", "get-url", "origin"], { encoding: "utf8", cwd: common.REPO_ROOT, timeout: 10_000 });
   return result.status === 0 ? parseRepoFromRemote(result.stdout) : null;
 }
@@ -166,14 +177,14 @@ async function installGh() {
 }
 
 async function repoAccessible(repo) {
-  return (await keyWrap.gh(["api", `repos/${repo}`, "-q", ".full_name"], { allowFailure: true })) !== null;
+  return (await gh(["api", `repos/${repo}`, "-q", ".full_name"], { allowFailure: true })) !== null;
 }
 
 async function acceptInvitation(repo) {
-  const text = await keyWrap.gh(["api", "user/repository_invitations"], { allowFailure: true });
+  const text = await gh(["api", "user/repository_invitations"], { allowFailure: true });
   const invitation = text ? findInvitation(JSON.parse(text), repo) : null;
   if (!invitation) return false;
-  await keyWrap.gh(["api", "-X", "PATCH", `user/repository_invitations/${invitation.id}`]);
+  await gh(["api", "-X", "PATCH", `user/repository_invitations/${invitation.id}`]);
   log(`accepted the invitation to ${repo}`);
   return true;
 }
@@ -190,12 +201,12 @@ export async function doctor(values) {
 
   report("Node 22+", nodeVersionOk(), nodeVersionOk() ? `node ${process.versions.node}` : `node ${process.versions.node}; install Node 22 or newer (https://nodejs.org or brew install node)`);
 
-  let gh = Boolean(common.ghBinary());
-  if (!gh && fix) gh = await installGh();
-  report("GitHub CLI", gh, gh ? common.ghBinary() : "install it: https://cli.github.com (brew install gh on macOS)");
+  let hasGh = Boolean(common.ghBinary());
+  if (!hasGh && fix) hasGh = await installGh();
+  report("GitHub CLI", hasGh, hasGh ? common.ghBinary() : "install it: https://cli.github.com (brew install gh on macOS)");
 
-  let loggedIn = gh && (await ghLoggedIn());
-  if (gh && !loggedIn && fix) {
+  let loggedIn = hasGh && (await ghLoggedIn());
+  if (hasGh && !loggedIn && fix) {
     log("signing you in to GitHub: a page opens; the one-time code goes on your clipboard");
     await ghLogin();
     loggedIn = await ghLoggedIn();
@@ -211,12 +222,17 @@ export async function doctor(values) {
   report("repository access", access, access ? repo : repo ? `no access to ${repo}: accept the invitation email, or ask the owner to invite you` : "could not determine the repository (git remote origin)");
 
   let ownerSetup = false;
+  let setupDetail = "needs GitHub access first";
   if (access) {
-    const role = await keyWrap.gh(["variable", "get", keyWrap.KEY_ARN_VARIABLE, "--repo", repo], { allowFailure: true });
-    const pub = await keyWrap.gh(["variable", "get", keyWrap.PUBLIC_KEY_VARIABLE, "--repo", repo], { allowFailure: true });
-    ownerSetup = Boolean(role && pub);
+    try {
+      const config = await gateway.labConfig({ gateway: values.gateway });
+      ownerSetup = Boolean(config.wrap_public_key);
+      setupDetail = `gateway answers for ${config.you} (${config.region}, ${config.zone})`;
+    } catch (error) {
+      setupDetail = error.message;
+    }
   }
-  report("lab account setup", ownerSetup, ownerSetup ? "repository variables present" : "the owner has not finished docs/09 one-time setup");
+  report("lab gateway", ownerSetup, setupDetail);
 
   let vapi = vapiCli.vapiBinary();
   if (!vapi && fix) vapi = vapiCli.installVapiCli();

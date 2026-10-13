@@ -49,15 +49,13 @@ test("bad material is rejected before anything is encrypted or stored", () => {
 
 test("provision inputs carry the wrapped key and never a raw one", () => {
   const wrapped = wrapPayload(buildWrapPayload({ engineer: "alice", key: KEY, now: NOW }), PUBLIC_DER);
-  const inputs = provisionInputs({ engineer: "alice", stages: "full", clientCidr: "203.0.113.7/32", wrapped, passphrase: "correct horse" });
-  assert.deepEqual(Object.keys(inputs).sort(), ["agent_auto_accept", "area_code", "client_cidr", "connect_alias", "engineer", "passphrase", "stages", "vapi_key_wrapped"]);
+  const inputs = provisionInputs({ engineer: "alice", stages: "full", clientCidr: "203.0.113.7/32", wrapped, handoutPublicKey: PUBLIC_DER });
+  assert.deepEqual(Object.keys(inputs).sort(), ["agent_auto_accept", "area_code", "client_cidr", "connect_alias", "engineer", "handout_public_key", "stages", "vapi_key_wrapped"]);
   assert.equal(inputs.vapi_key_wrapped, wrapped);
+  assert.equal(inputs.handout_public_key, PUBLIC_DER);
   assert.ok(!JSON.stringify(inputs).includes(KEY));
-  assert.throws(() => provisionInputs({ engineer: "alice", stages: "full", wrapped }), /client-cidr/);
-  assert.throws(() => provisionInputs({ engineer: "alice", stages: "phone", wrapped: KEY }), /wrapped key/);
-  assert.throws(() => provisionInputs({ engineer: "alice", stages: "phone", wrapped, passphrase: "short" }), /passphrase/);
-  const keyed = provisionInputs({ engineer: "alice", stages: "phone", wrapped, handoutPublicKey: PUBLIC_DER });
-  assert.equal(keyed.handout_public_key, PUBLIC_DER);
-  assert.ok(!("passphrase" in keyed));
+  assert.throws(() => provisionInputs({ engineer: "alice", stages: "full", wrapped, handoutPublicKey: PUBLIC_DER }), /client-cidr/);
+  assert.throws(() => provisionInputs({ engineer: "alice", stages: "phone", wrapped: KEY, handoutPublicKey: PUBLIC_DER }), /wrapped key/);
+  assert.throws(() => provisionInputs({ engineer: "alice", stages: "phone", wrapped }), /handout public key/);
   assert.throws(() => provisionInputs({ engineer: "alice", stages: "phone", wrapped, handoutPublicKey: "not base64!" }), /base64/);
 });

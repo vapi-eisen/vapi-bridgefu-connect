@@ -1,20 +1,23 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   Protected sandbox for hosting the vapi-bridgefu-connect lab inside a shared
-  AWS account. Deploy once as an administrator. Creates: a GitHub Actions OIDC
-  role that runs the lab CLI, bounded by a permissions boundary (lab-named
-  resources only, two regions, small ARM instance types, no IAM users or keys);
-  a delegated Route53 subzone so labs never touch the parent zone's records; an
-  optional monthly budget alarm; a private S3 bucket for lab state; and an RSA
-  KMS key that engineers encrypt their OWN Vapi private key to, so each lab
-  uses its engineer's Vapi org and nobody else sees the key. Engineers never
-  need AWS credentials; the nightly reaper workflow removes stale labs.
+  AWS account. Deploy with `node scripts/lab.mjs owner deploy`. Creates: a
+  CodeBuild project that runs the lab CLI as a role bounded by a permissions
+  boundary (lab-named resources only, two regions, small ARM instance types, no
+  IAM users or keys); a gateway Lambda function URL that lets engineers with
+  read access to the GitHub repository start, check, and tear down their own
+  lab; a nightly reaper schedule; a delegated Route53 subzone so labs never
+  touch the parent zone's records; an optional monthly budget alarm; a private
+  S3 bucket for lab state; and an RSA KMS key that engineers encrypt their OWN
+  Vapi private key to, so each lab uses its engineer's Vapi org and nobody else
+  sees the key. Engineers never need AWS credentials and nothing runs in GitHub
+  Actions.
 
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
-      - Label: {default: GitHub trust}
-        Parameters: [GitHubRepository, GitHubRefSuffix, CreateOidcProvider]
+      - Label: {default: Remote-mode gateway}
+        Parameters: [LabRepository, LabRef, LabAdmins, GatewayCodeKey, MaxLabs, LabMaxAgeDays]
       - Label: {default: 'Lab DNS: delegated subzone (recommended) or an existing zone'}
         Parameters: [ParentHostedZoneId, ParentZoneName, LabSubdomain, HostedZoneId, HostedZoneName]
       - Label: {default: Guardrails}
@@ -23,22 +26,36 @@ Metadata:
         Parameters: [RoleName, StateBucketName]
 
 Parameters:
-  GitHubRepository:
+  LabRepository:
     Type: String
-    AllowedPattern: '^[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?$'
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
     Description: >-
-      Repository whose workflows may assume the role, exactly as GitHub writes it in the token subject.
-      Run `gh api repos/OWNER/REPO/actions/oidc/customization/sub`: when use_immutable_subject is true, copy
-      the part after `repo:` from sub_claim_prefix (owner@ownerId/name@repoId); otherwise plain owner/name.
-  GitHubRefSuffix:
+      GitHub repository (owner/name) of the lab. Anyone whose GitHub token can read it may use the gateway, and the
+      runner executes this repository's code at LabRef, fetched from GitHub at the start of every job.
+  LabRef:
     Type: String
-    Default: '*'
-    Description: Subject suffix after repo:<owner>/<name>:. Keep * for any branch; ref:refs/heads/main restricts to main.
-  CreateOidcProvider:
+    Default: main
+    AllowedPattern: '^[A-Za-z0-9_./-]{1,100}$'
+    Description: Branch, tag, or commit the runner executes.
+  LabAdmins:
     Type: String
-    Default: 'true'
-    AllowedValues: ['true', 'false']
-    Description: false if this account already has the token.actions.githubusercontent.com provider.
+    Default: ''
+    AllowedPattern: '^[A-Za-z0-9,-]*$'
+    Description: Comma-separated GitHub logins that may verify or tear down any engineer's lab.
+  GatewayCodeKey:
+    Type: String
+    Default: ''
+    Description: S3 key of the packaged gateway in the state bucket (owner deploy sets it; empty skips the gateway).
+  MaxLabs:
+    Type: Number
+    Default: 40
+    MinValue: 1
+    Description: Most labs that may exist at once; the gateway refuses new handles beyond it.
+  LabMaxAgeDays:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    Description: The nightly reaper tears down labs older than this.
   ParentHostedZoneId:
     Type: String
     Default: ''
@@ -90,23 +107,13 @@ Parameters:
     Description: Leave empty for bridgefu-lab-state-<account>-<region>.
 
 Conditions:
-  CreateProvider: !Equals [!Ref CreateOidcProvider, 'true']
+  HasGateway: !Not [!Equals [!Ref GatewayCodeKey, '']]
   CreateLabZone: !Not [!Equals [!Ref ParentHostedZoneId, '']]
   CreateBudget: !Not [!Equals [!Ref BudgetEmail, '']]
   FilterBudget: !Not [!Equals [!Ref BudgetTagValue, '']]
   DefaultBucketName: !Equals [!Ref StateBucketName, '']
 
 Resources:
-  GitHubOidcProvider:
-    Type: AWS::IAM::OIDCProvider
-    Condition: CreateProvider
-    Properties:
-      Url: https://token.actions.githubusercontent.com
-      ClientIdList: [sts.amazonaws.com]
-      ThumbprintList:
-        - 6938fd4d98bab03faadb97b34396831e3780aea1
-        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
-
   # Labs get their own zone. The runner can only change records here, never in
   # the parent zone; the parent only holds the NS delegation created below.
   LabHostedZone:
@@ -149,12 +156,24 @@ Resources:
           - Id: expire-old-versions
             Status: Enabled
             NoncurrentVersionExpiration: {NoncurrentDays: 30}
+          # job progress, encrypted handouts, and verify reports
+          - Id: expire-job-outputs
+            Status: Enabled
+            Prefix: jobs/
+            ExpirationInDays: 2
+            NoncurrentVersionExpiration: {NoncurrentDays: 1}
+          # repository snapshots the runner executed
+          - Id: expire-source-snapshots
+            Status: Enabled
+            Prefix: source/
+            ExpirationInDays: 60
       Tags:
         - {Key: Project, Value: vapi-bridgefu-connect}
 
   # Engineers encrypt their own Vapi private key to this key's public half on
   # their laptop (scripts/lib/key_wrap.mjs); only the runner can decrypt it,
-  # inside a workflow run, into a per-lab secret that teardown deletes.
+  # inside a CodeBuild job, into a per-lab secret that teardown deletes. The
+  # gateway serves the public half to engineers.
   WrapKey:
     Type: AWS::KMS::Key
     Properties:
@@ -387,32 +406,233 @@ Resources:
             Resource:
               - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleName}'
               - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${RoleName}-boundary'
+              - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RoleName}Gateway'
 
   RunnerRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Ref RoleName
-      Description: GitHub Actions runner for the vapi-bridgefu-connect lab (bounded by its own policy).
+      Description: CodeBuild runner for the vapi-bridgefu-connect lab (bounded by its own policy).
       MaxSessionDuration: 14400
       PermissionsBoundary: !Ref LabPolicy
       ManagedPolicyArns: [!Ref LabPolicy]
+      # Kept out of LabPolicy (IAM caps a managed policy at 6144 characters); an
+      # explicit deny binds wherever it is attached.
+      Policies:
+        - PolicyName: hands-off-the-gateway
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DenyTouchingTheGateway
+                Effect: Deny
+                Action: ['lambda:*', 'codebuild:*', 'events:*', 'scheduler:*']
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:lambda:*:${AWS::AccountId}:function:${RoleName}Gateway'
+                  - !Sub 'arn:${AWS::Partition}:codebuild:*:${AWS::AccountId}:project/${RoleName}'
+                  - !Sub 'arn:${AWS::Partition}:events:*:${AWS::AccountId}:rule/${RoleName}-reaper'
+              # the gateway's records, its code, and the repository snapshots are written by the gateway alone
+              - Sid: DenyRewritingGatewayObjects
+                Effect: Deny
+                Action: [s3:PutObject, s3:DeleteObject, s3:DeleteObjectVersion, s3:PutObjectAcl]
+                Resource: [!Sub '${StateBucket.Arn}/gateway/*', !Sub '${StateBucket.Arn}/source/*', !Sub '${StateBucket.Arn}/labs/*']
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              Federated: !If
-                - CreateProvider
-                - !Ref GitHubOidcProvider
-                - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
-            Action: sts:AssumeRoleWithWebIdentity
+            Principal: {Service: codebuild.amazonaws.com}
+            Action: sts:AssumeRole
             Condition:
               StringEquals:
-                token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringLike:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:${GitHubRefSuffix}'
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${RoleName}'
       Tags:
         - {Key: Project, Value: vapi-bridgefu-connect}
+
+  RunnerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/bridgefu-lab/${RoleName}'
+      RetentionInDays: 14
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+
+  # Runs one lab job (provision, verify, teardown, reap) per build. The gateway
+  # passes the validated job in LAB_JOB and the repository snapshot it fetched
+  # from GitHub in LAB_SOURCE_KEY; the build runs that code as the runner role.
+  RunnerProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Ref RoleName
+      Description: vapi-bridgefu-connect lab runner (jobs come from the gateway)
+      ServiceRole: !GetAtt RunnerRole.Arn
+      TimeoutInMinutes: 300
+      QueuedTimeoutInMinutes: 60
+      ConcurrentBuildLimit: 20
+      Artifacts: {Type: NO_ARTIFACTS}
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          env:
+            shell: bash
+          phases:
+            install:
+              runtime-versions:
+                nodejs: 22
+            build:
+              commands:
+                - aws s3 cp "s3://${LAB_STATE_BUCKET}/${LAB_SOURCE_KEY}" /tmp/lab-source.zip --only-show-errors
+                - mkdir -p /tmp/lab-source && (unzip -q /tmp/lab-source.zip -d /tmp/lab-source || python3 -m zipfile -e /tmp/lab-source.zip /tmp/lab-source)
+                - cd "$(find /tmp/lab-source -mindepth 1 -maxdepth 1 -type d | head -n 1)" && node scripts/lab.mjs runner
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        EnvironmentVariables:
+          - {Name: LAB_STATE_BUCKET, Value: !Ref StateBucket}
+          - {Name: LAB_HOSTED_ZONE_ID, Value: !If [CreateLabZone, !Ref LabHostedZone, !Ref HostedZoneId]}
+          - {Name: LAB_HOSTED_ZONE_NAME, Value: !If [CreateLabZone, !Sub '${LabSubdomain}.${ParentZoneName}', !Ref HostedZoneName]}
+          - {Name: LAB_WRAP_KEY_ARN, Value: !GetAtt WrapKey.Arn}
+          - {Name: LAB_MAX_AGE_DAYS, Value: !Ref LabMaxAgeDays}
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref RunnerLogGroup
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+
+  GatewayRole:
+    Type: AWS::IAM::Role
+    Condition: HasGateway
+    Properties:
+      RoleName: !Sub '${RoleName}Gateway'
+      Description: The remote-mode gateway Lambda of the vapi-bridgefu-connect lab.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: gateway
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: StartAndWatchJobs
+                Effect: Allow
+                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds]
+                Resource: !GetAtt RunnerProject.Arn
+              - Sid: ReadJobLogs
+                Effect: Allow
+                Action: logs:GetLogEvents
+                Resource: !Sub '${RunnerLogGroup.Arn}'
+              - Sid: ReadLabState
+                Effect: Allow
+                Action: [s3:GetObject]
+                Resource: !Sub '${StateBucket.Arn}/*'
+              - Sid: ListLabState
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt StateBucket.Arn
+              - Sid: WriteGatewayRecords
+                Effect: Allow
+                Action: [s3:PutObject]
+                Resource: [!Sub '${StateBucket.Arn}/labs/*', !Sub '${StateBucket.Arn}/source/*']
+              - Sid: ServeWrapPublicKey
+                Effect: Allow
+                Action: kms:GetPublicKey
+                Resource: !GetAtt WrapKey.Arn
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+
+  GatewayFunction:
+    Type: AWS::Lambda::Function
+    Condition: HasGateway
+    Properties:
+      FunctionName: !Sub '${RoleName}Gateway'
+      Description: Remote-mode front door of the vapi-bridgefu-connect lab (GitHub repository access gates every call).
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Architectures: [arm64]
+      MemorySize: 512
+      Timeout: 60
+      Role: !GetAtt GatewayRole.Arn
+      Code:
+        S3Bucket: !Ref StateBucket
+        S3Key: !Ref GatewayCodeKey
+      Environment:
+        Variables:
+          LAB_REPO: !Ref LabRepository
+          LAB_REF: !Ref LabRef
+          LAB_ADMINS: !Ref LabAdmins
+          LAB_PROJECT: !Ref RunnerProject
+          LAB_STATE_BUCKET: !Ref StateBucket
+          LAB_WRAP_KEY_ARN: !GetAtt WrapKey.Arn
+          LAB_HOSTED_ZONE_NAME: !If [CreateLabZone, !Sub '${LabSubdomain}.${ParentZoneName}', !Ref HostedZoneName]
+          LAB_MAX_LABS: !Ref MaxLabs
+          LAB_MAX_AGE_DAYS: !Ref LabMaxAgeDays
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+
+  GatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: HasGateway
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${RoleName}Gateway'
+      RetentionInDays: 30
+      Tags:
+        - {Key: Project, Value: vapi-bridgefu-connect}
+
+  # Public URL; every request must carry a GitHub token that can read LabRepository.
+  GatewayUrl:
+    Type: AWS::Lambda::Url
+    Condition: HasGateway
+    Properties:
+      TargetFunctionArn: !GetAtt GatewayFunction.Arn
+      AuthType: NONE
+
+  GatewayUrlPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasGateway
+    Properties:
+      FunctionName: !Ref GatewayFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  GatewayUrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasGateway
+    Properties:
+      FunctionName: !Ref GatewayFunction
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+
+  ReaperSchedule:
+    Type: AWS::Events::Rule
+    Condition: HasGateway
+    Properties:
+      Name: !Sub '${RoleName}-reaper'
+      Description: Nightly teardown of labs older than LabMaxAgeDays.
+      ScheduleExpression: cron(17 5 * * ? *)
+      State: ENABLED
+      Targets:
+        - Id: gateway
+          Arn: !GetAtt GatewayFunction.Arn
+          Input: '{"action":"reap"}'
+
+  ReaperPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasGateway
+    Properties:
+      FunctionName: !Ref GatewayFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ReaperSchedule.Arn
 
 Outputs:
   RoleArn:
@@ -420,19 +640,17 @@ Outputs:
   StateBucketName:
     Value: !Ref StateBucket
   WrapKeyArn:
-    Description: KMS key engineers wrap their Vapi private key to (workflow variable LAB_WRAP_KEY_ARN).
+    Description: KMS key engineers wrap their Vapi private key to (the gateway serves its public half).
     Value: !GetAtt WrapKey.Arn
   LabHostedZoneId:
     Description: Zone the labs create their hostnames in.
     Value: !If [CreateLabZone, !Ref LabHostedZone, !Ref HostedZoneId]
   LabZoneName:
     Value: !If [CreateLabZone, !Sub '${LabSubdomain}.${ParentZoneName}', !Ref HostedZoneName]
-  PublishPublicKeyCommand:
-    Description: Publishes the wrap key's public half as a repository variable so engineers can wrap their key without AWS access.
-    Value: !Sub 'gh variable set LAB_WRAP_PUBLIC_KEY --body "$(aws kms get-public-key --region ${AWS::Region} --key-id ${WrapKey.Arn} --query PublicKey --output text)"'
-  GitHubVariables:
-    Description: Repository variables the workflows read (set with gh variable set NAME --body VALUE).
-    Value: !Sub
-      - 'AWS_LAB_ROLE_ARN=${RunnerRole.Arn} AWS_LAB_REGION=${AWS::Region} LAB_STATE_BUCKET=${StateBucket} LAB_HOSTED_ZONE_ID=${Zone} LAB_HOSTED_ZONE_NAME=${ZoneName} LAB_WRAP_KEY_ARN=${WrapKey.Arn} LAB_MAX_AGE_DAYS=3'
-      - Zone: !If [CreateLabZone, !Ref LabHostedZone, !Ref HostedZoneId]
-        ZoneName: !If [CreateLabZone, !Sub '${LabSubdomain}.${ParentZoneName}', !Ref HostedZoneName]
+  RunnerProject:
+    Description: CodeBuild project that runs every lab job.
+    Value: !Ref RunnerProject
+  GatewayUrl:
+    Condition: HasGateway
+    Description: Remote-mode gateway; owner deploy writes it to remote-lab.json.
+    Value: !GetAtt GatewayUrl.FunctionUrl
